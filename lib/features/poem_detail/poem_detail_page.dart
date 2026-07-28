@@ -1,0 +1,403 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../app/app_providers.dart';
+import '../../app/app_design.dart';
+import '../../core/user_facing_error.dart';
+import '../../domain/poem.dart';
+import '../../shared/widgets/poem_pinyin_text.dart';
+import '../../shared/widgets/section_card.dart';
+import '../dictation/dictation_page.dart';
+import '../reading/reading_placeholder_page.dart';
+import '../recite/recite_placeholder_page.dart';
+import '../wrong_book/wrong_book_placeholder_page.dart';
+
+enum _DetailTab {
+  content('原文'),
+  annotation('注释'),
+  translation('译文'),
+  appreciation('赏析'),
+  author('作者'),
+  extension('拓展');
+
+  const _DetailTab(this.label);
+
+  final String label;
+}
+
+class PoemDetailPage extends ConsumerStatefulWidget {
+  const PoemDetailPage({super.key, required this.poemId});
+
+  final int poemId;
+
+  @override
+  ConsumerState<PoemDetailPage> createState() => _PoemDetailPageState();
+}
+
+class _PoemDetailPageState extends ConsumerState<PoemDetailPage> {
+  _DetailTab _tab = _DetailTab.annotation;
+  late Future<_DetailViewData?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final showPinyin = ref.watch(pinyinVisibleProvider);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('诗词详情'),
+        actions: [
+          IconButton(
+            onPressed: () {
+              setState(() {
+                _future = _load();
+              });
+            },
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: '重新加载诗词详情',
+          ),
+        ],
+      ),
+      body: FutureBuilder<_DetailViewData?>(
+        future: _future,
+        builder: (context, snapshot) {
+          final detail = snapshot.data;
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.xLarge),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      UserFacingErrorMapper.message(
+                        snapshot.error!,
+                        fallbackMessage: '诗词详情加载失败，请稍后重试。',
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: AppSpacing.large),
+                    FilledButton.icon(
+                      onPressed: () => setState(() => _future = _load()),
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('重试'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+          if (detail == null) {
+            return const Center(child: Text('没有找到对应诗词。'));
+          }
+
+          final poem = detail.poem;
+          final compactLayout =
+              MediaQuery.sizeOf(context).width < AppLayout.compactWidth;
+          final pagePadding =
+              compactLayout ? AppSpacing.medium : AppSpacing.large;
+          const sectionGap = AppSpacing.medium;
+          return Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: AppLayout.readingMaxWidth,
+              ),
+              child: ListView(
+                padding: EdgeInsets.all(pagePadding),
+                children: [
+                  _PoemHeaderCard(
+                    poem: poem,
+                    isFavorite: detail.isFavorite,
+                    onFavoriteToggle: _toggleFavorite,
+                  ),
+                  SizedBox(height: sectionGap),
+                  SectionCard(
+                    title: '原文',
+                    subtitle: compactLayout ? null : '先看完整诗句，再选下一步练习。',
+                    child: PoemPinyinText(
+                      poem: detail.poem,
+                      showPinyin: showPinyin,
+                      variant: PoemPinyinTextVariant.detail,
+                    ),
+                  ),
+                  SizedBox(height: sectionGap),
+                  _NextStepAdvice(
+                    onOpenReading: () => _openReadingPractice(poem.id),
+                    onOpenRecite: () => _openRecitePractice(poem.id),
+                    onOpenDictation: _openDictationPractice,
+                    onOpenWrongBook: _openWrongBook,
+                  ),
+                  SizedBox(height: sectionGap),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: _DetailTab.values
+                          .where((tab) => tab != _DetailTab.content)
+                          .map((tab) {
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: ChoiceChip(
+                                label: Text(tab.label),
+                                selected: _tab == tab,
+                                onSelected: (_) {
+                                  setState(() {
+                                    _tab = tab;
+                                  });
+                                },
+                              ),
+                            );
+                          })
+                          .toList(growable: false),
+                    ),
+                  ),
+                  SizedBox(height: sectionGap),
+                  SectionCard(
+                    title: '了解这首诗',
+                    subtitle: '想知道意思时再看这里。',
+                    child: Text(
+                      _contentFor(detail),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyLarge?.copyWith(height: 1.8),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<_DetailViewData?> _load() async {
+    final poem = await ref
+        .read(poemRepositoryProvider)
+        .fetchPoemById(widget.poemId);
+    if (poem == null) {
+      return null;
+    }
+    final isFavorite = await ref
+        .read(poemRepositoryProvider)
+        .isFavorite(widget.poemId);
+    return _DetailViewData(poem: poem, isFavorite: isFavorite);
+  }
+
+  Future<void> _toggleFavorite() async {
+    final detail = await _future;
+    if (detail == null) {
+      return;
+    }
+    await ref
+        .read(poemRepositoryProvider)
+        .setFavorite(detail.poem.id, !detail.isFavorite);
+    ref.invalidate(favoritesProvider);
+    ref.invalidate(learningSummaryProvider);
+    setState(() {
+      _future = _load();
+    });
+  }
+
+  String _contentFor(_DetailViewData detail) {
+    final poem = detail.poem;
+    return switch (_tab) {
+      _DetailTab.content =>
+        poem.lines.isEmpty ? poem.content : poem.lines.join('\n'),
+      _DetailTab.annotation =>
+        poem.annotation.isEmpty ? '暂无注释。' : poem.annotation,
+      _DetailTab.translation =>
+        poem.translation.isEmpty ? '暂无译文。' : poem.translation,
+      _DetailTab.appreciation =>
+        poem.appreciation.isEmpty ? '暂无赏析。' : poem.appreciation,
+      _DetailTab.author =>
+        poem.authorIntro.isEmpty ? '暂无作者介绍。' : poem.authorIntro,
+      _DetailTab.extension =>
+        poem.extension.isEmpty ? '暂无拓展内容。' : poem.extension,
+    };
+  }
+
+  void _openReadingPractice(int poemId) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ReadingPlaceholderPage(poemId: poemId)),
+    );
+  }
+
+  void _openRecitePractice(int poemId) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => RecitePlaceholderPage(poemId: poemId)),
+    );
+  }
+
+  void _openDictationPractice() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const DictationPage()));
+  }
+
+  void _openWrongBook() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const WrongBookPlaceholderPage()));
+  }
+}
+
+class _DetailViewData {
+  const _DetailViewData({required this.poem, required this.isFavorite});
+
+  final Poem poem;
+  final bool isFavorite;
+}
+
+class _PoemHeaderCard extends StatelessWidget {
+  const _PoemHeaderCard({
+    required this.poem,
+    required this.isFavorite,
+    required this.onFavoriteToggle,
+  });
+
+  final Poem poem;
+  final bool isFavorite;
+  final VoidCallback onFavoriteToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: EdgeInsets.all(
+          MediaQuery.sizeOf(context).width < AppLayout.compactWidth
+              ? AppSpacing.medium
+              : AppSpacing.large,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    poem.title,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    poem.author.isEmpty
+                        ? poem.dynasty
+                        : '${poem.dynasty} · ${poem.author}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton.filledTonal(
+              onPressed: onFavoriteToggle,
+              tooltip: isFavorite ? '取消收藏' : '收藏',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(
+                isFavorite
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NextStepAdvice extends StatelessWidget {
+  const _NextStepAdvice({
+    required this.onOpenReading,
+    required this.onOpenRecite,
+    required this.onOpenDictation,
+    required this.onOpenWrongBook,
+  });
+
+  final VoidCallback onOpenReading;
+  final VoidCallback onOpenRecite;
+  final VoidCallback onOpenDictation;
+  final VoidCallback onOpenWrongBook;
+
+  @override
+  Widget build(BuildContext context) {
+    final compactLayout =
+        MediaQuery.sizeOf(context).width < AppLayout.compactWidth;
+    return SectionCard(
+      title: '开始练习',
+      subtitle: compactLayout ? null : '选择适合现在进度的练习。',
+      padding: const EdgeInsets.all(AppSpacing.large),
+      child: _CompactAdviceGrid(
+        onOpenReading: onOpenReading,
+        onOpenRecite: onOpenRecite,
+        onOpenDictation: onOpenDictation,
+        onOpenWrongBook: onOpenWrongBook,
+      ),
+    );
+  }
+}
+
+class _CompactAdviceGrid extends StatelessWidget {
+  const _CompactAdviceGrid({
+    required this.onOpenReading,
+    required this.onOpenRecite,
+    required this.onOpenDictation,
+    required this.onOpenWrongBook,
+  });
+
+  final VoidCallback onOpenReading;
+  final VoidCallback onOpenRecite;
+  final VoidCallback onOpenDictation;
+  final VoidCallback onOpenWrongBook;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = <(IconData, String, VoidCallback)>[
+      (Icons.graphic_eq_rounded, '读一读', onOpenReading),
+      (Icons.auto_stories_rounded, '背一背', onOpenRecite),
+      (Icons.edit_note_rounded, '练听写', onOpenDictation),
+      (Icons.inventory_2_rounded, '去复习', onOpenWrongBook),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final itemWidth = (constraints.maxWidth - 8) / 2;
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final item in items)
+              SizedBox(
+                width: itemWidth,
+                child: FilledButton.tonalIcon(
+                  onPressed: item.$3,
+                  icon: Icon(item.$1, size: 18),
+                  label: Text(item.$2),
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}

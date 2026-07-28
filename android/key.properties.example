@@ -1,0 +1,6 @@
+# Copy to android/key.properties and replace every placeholder.
+# Never commit the real key.properties or keystore file.
+storeFile=app/gscappall-release.jks
+storePassword=CHANGE_ME
+keyAlias=gscappall-release
+keyPassword=CHANGE_ME

@@ -1,0 +1,12 @@
+{
+  "name": "gscappall-sync-proxy",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}

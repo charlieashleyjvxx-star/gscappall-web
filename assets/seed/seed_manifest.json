@@ -1,0 +1,105 @@
+﻿{
+    "sourceProject":  "GSCapp",
+    "sourceFile":  "D:\\GSCapp\\gushici-app\\src\\data\\poemsData.ts",
+    "extractedAt":  "2026-04-21T11:49:56",
+    "seedVersion":  "20250315.3",
+    "poemCount":  165,
+    "gradeSummary":  [
+                         {
+                             "gradeLabel":  "二年级",
+                             "count":  10
+                         },
+                         {
+                             "gradeLabel":  "六年级",
+                             "count":  96
+                         },
+                         {
+                             "gradeLabel":  "三年级",
+                             "count":  29
+                         },
+                         {
+                             "gradeLabel":  "四年级",
+                             "count":  2
+                         },
+                         {
+                             "gradeLabel":  "五年级",
+                             "count":  20
+                         },
+                         {
+                             "gradeLabel":  "一年级",
+                             "count":  8
+                         }
+                     ],
+    "categorySummary":  [
+                            {
+                                "category":  "山水田园",
+                                "count":  70
+                            },
+                            {
+                                "category":  "羁旅思乡",
+                                "count":  24
+                            },
+                            {
+                                "category":  "咏物言志",
+                                "count":  21
+                            },
+                            {
+                                "category":  "边塞军旅",
+                                "count":  18
+                            },
+                            {
+                                "category":  "哲理讽喻",
+                                "count":  18
+                            },
+                            {
+                                "category":  "送别怀人",
+                                "count":  14
+                            }
+                        ],
+    "dynastySummary":  [
+                           {
+                               "dynasty":  "唐",
+                               "count":  93
+                           },
+                           {
+                               "dynasty":  "宋",
+                               "count":  45
+                           },
+                           {
+                               "dynasty":  "清",
+                               "count":  9
+                           },
+                           {
+                               "dynasty":  "两汉",
+                               "count":  5
+                           },
+                           {
+                               "dynasty":  "魏晋",
+                               "count":  3
+                           },
+                           {
+                               "dynasty":  "元",
+                               "count":  3
+                           },
+                           {
+                               "dynasty":  "明",
+                               "count":  2
+                           },
+                           {
+                               "dynasty":  "近现代",
+                               "count":  2
+                           },
+                           {
+                               "dynasty":  "汉",
+                               "count":  1
+                           },
+                           {
+                               "dynasty":  "南北朝",
+                               "count":  1
+                           },
+                           {
+                               "dynasty":  "先秦",
+                               "count":  1
+                           }
+                       ]
+}

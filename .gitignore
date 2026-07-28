@@ -1,0 +1,42 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+build/
+coverage/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# JavaScript tooling
+**/node_modules/
+**/.env
+**/.env.*
+!**/.env.example
+
+# Platform build output
+android/.gradle/
+android/app/build/
+ios/Pods/
+ios/.symlinks/
+windows/flutter/
+windows/runner/Debug/
+windows/runner/Release/
+
+# Generated docs / local artifacts
+*.log
+/*.png
+/*.jpg
+/*.xml
+
+# Downloaded/extracted model workspaces
+tools/tmp_sherpa/
+
+# Android release signing secrets
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
