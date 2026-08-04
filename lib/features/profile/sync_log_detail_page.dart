@@ -1,11 +1,10 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/app_providers.dart';
 import '../../core/app_environment.dart';
+import '../../core/diagnostic_sanitizer.dart';
 import '../../core/user_facing_error.dart';
 import '../../domain/sync/sync_models.dart';
 import '../shared/stage_scope_route_args.dart';
@@ -49,26 +48,19 @@ class SyncLogDetailPage extends ConsumerWidget {
               _InfoRow(label: '冲突', value: '${log.conflictCount} 个'),
             ],
           ),
-          if (requestIds.isNotEmpty) ...[
+          if (AppEnvironment.diagnosticsEnabled && requestIds.isNotEmpty) ...[
             const SizedBox(height: 12),
             _Section(
-              title: AppEnvironment.diagnosticsEnabled ? '技术记录' : '排查信息',
+              title: '技术记录',
               children: [
-                Text(
-                  AppEnvironment.diagnosticsEnabled
-                      ? '诊断模式：可用排查编号查看本次备份请求。'
-                      : '联系客服时可提供以下排查编号。',
-                ),
+                Text('诊断模式：可用排查编号查看本次备份请求。'),
                 const SizedBox(height: 12),
                 for (final entry in requestIds.entries)
                   _RequestIdTile(
                     label: entry.key == 'push' ? '推送请求' : '拉取请求',
                     requestId: entry.value,
                     onView:
-                        AppEnvironment.diagnosticsEnabled
-                            ? () =>
-                                _showServerRequestLog(context, ref, entry.value)
-                            : null,
+                        () => _showServerRequestLog(context, ref, entry.value),
                   ),
               ],
             ),
@@ -92,7 +84,7 @@ class SyncLogDetailPage extends ConsumerWidget {
             _Section(
               title: '相关详情入口',
               children: [
-                const Text('从备份记录中识别到具体报告、错题或学习记录编号，可直接打开详情。'),
+                const Text('可以直接打开与本次备份相关的学习内容。'),
                 const SizedBox(height: 12),
                 for (final id in reportIds)
                   _RecordRouteTile(
@@ -103,7 +95,7 @@ class SyncLogDetailPage extends ConsumerWidget {
                       source: 'sync-log',
                     ),
                     icon: Icons.article_outlined,
-                    label: '报告 #$id',
+                    label: '打开练习报告',
                     description: '查看这份报告详情',
                   ),
                 for (final id in wrongQuestionIds)
@@ -115,7 +107,7 @@ class SyncLogDetailPage extends ConsumerWidget {
                       source: 'sync-log',
                     ),
                     icon: Icons.quiz_outlined,
-                    label: '错题 #$id',
+                    label: '打开错题详情',
                     description: '查看这道错题并继续复习',
                   ),
                 for (final id in learningRecordIds)
@@ -127,7 +119,7 @@ class SyncLogDetailPage extends ConsumerWidget {
                       source: 'sync-log',
                     ),
                     icon: Icons.history_edu_outlined,
-                    label: '学习记录 #$id',
+                    label: '打开学习记录',
                     description: '查看这次练习对应哪一关',
                   ),
               ],
@@ -151,7 +143,7 @@ class SyncLogDetailPage extends ConsumerWidget {
                   style: TextStyle(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 6),
-                SelectableText(error),
+                SelectableText(DiagnosticSanitizer.text(error)),
               ],
             ],
           ),
@@ -166,7 +158,11 @@ class SyncLogDetailPage extends ConsumerWidget {
                           .map(
                             (note) => Padding(
                               padding: const EdgeInsets.only(bottom: 8),
-                              child: SelectableText(friendlySyncNote(note)),
+                              child: SelectableText(
+                                DiagnosticSanitizer.text(
+                                  friendlySyncNote(note),
+                                ),
+                              ),
                             ),
                           )
                           .toList(growable: false),
@@ -451,7 +447,7 @@ class _ServerRequestLogSheet extends StatelessWidget {
                               label: const Text('复制排查信息'),
                             ),
                             SelectableText(
-                              const JsonEncoder.withIndent('  ').convert(entry),
+                              DiagnosticSanitizer.prettyJson(entry),
                             ),
                           ],
                         ),
@@ -539,30 +535,14 @@ String _serverRequestDiagnostic(Map<String, dynamic> entry) {
         ..writeln('statusCode: ${entry['statusCode'] ?? 'unknown'}')
         ..writeln('durationMs: ${entry['durationMs'] ?? 'unknown'}')
         ..writeln('errorCode: ${entry['errorCode'] ?? 'none'}')
-        ..writeln('deviceId: ${entry['deviceId'] ?? 'unknown'}')
         ..writeln('createdAt: ${entry['createdAt'] ?? 'unknown'}')
         ..writeln()
-        ..write(const JsonEncoder.withIndent('  ').convert(entry));
-  return buffer.toString();
+        ..write(DiagnosticSanitizer.prettyJson(entry));
+  return DiagnosticSanitizer.text(buffer.toString());
 }
 
 String friendlySyncLogError(String raw) {
-  if (raw.contains('Connection closed before full header was received')) {
-    return '备份服务连接中断。通常是本机备份服务被关闭、重启，或真机转发断开。请确认备份服务正在运行后重试。';
-  }
-  if (raw.contains('Connection refused')) {
-    return '无法连接备份服务。请确认备份服务已启动，并检查真机转发或局域网地址。';
-  }
-  if (raw.contains('401') || raw.toLowerCase().contains('unauthorized')) {
-    return '备份账号登录已失效，请重新登录。';
-  }
-  if (raw.contains('timeout') || raw.contains('timed out')) {
-    return '备份请求超时，请检查网络或备份服务状态。';
-  }
-  return UserFacingErrorMapper.parentMessage(
-    raw,
-    fallbackMessage: '备份失败，请稍后重试。',
-  );
+  return UserFacingErrorMapper.message(raw, fallbackMessage: '备份失败，请稍后重试。');
 }
 
 String friendlySyncNote(String note) {

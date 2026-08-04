@@ -5,26 +5,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/app_providers.dart';
 import '../../app/app_design.dart';
-import '../../core/app_environment.dart';
 import '../../core/user_facing_error.dart';
 import '../../core/app_formatters.dart';
-import '../../core/service_status.dart';
 import '../../domain/learning_models.dart';
 import '../../domain/practice_models.dart';
 import '../../domain/user_profile.dart';
 import '../../services/game/challenge_progress_service.dart';
 import '../../shared/widgets/section_card.dart';
-import '../../shared/widgets/status_chip.dart';
 import '../favorites/favorites_page.dart';
+import '../study_cards/study_cards_page.dart';
 import '../shared/stage_contribution_view.dart';
 import '../shared/stage_scope_route_args.dart';
 import '../shared/stage_scope_source_hint.dart';
-import 'learning_history_page.dart';
 import 'profile_support.dart';
-import 'profile_switch_page.dart';
 import 'settings_page.dart';
-import 'sync_account_page.dart';
-import 'sync_status_card.dart';
 
 typedef _StageTrendDetailOpener =
     Future<void> Function(
@@ -39,22 +33,13 @@ class ProfilePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final profileAsync = ref.watch(profileProvider);
-    final profilesAsync = ref.watch(profilesProvider);
-    final services = ref.watch(serviceCatalogProvider);
 
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(20),
         children: [
           profileAsync.when(
-            data:
-                (profile) => _ProfileHeader(
-                  profile: profile,
-                  onOpenSettings:
-                      () => _openPage(context, const SettingsPage()),
-                  onSwitchProfile:
-                      () => _openPage(context, const ProfileSwitchPage()),
-                ),
+            data: (profile) => _ProfileHeader(profile: profile),
             loading: () => const LinearProgressIndicator(),
             error:
                 (error, _) => Text(
@@ -77,125 +62,24 @@ class ProfilePage extends ConsumerWidget {
                   onTap: () => _openPage(context, const FavoritesPage()),
                 ),
                 _ActionTile(
-                  title: '设置',
-                  subtitle: '调整提醒、字体、主题和语速。',
-                  icon: Icons.settings_rounded,
-                  onTap: () => _openPage(context, const SettingsPage()),
+                  title: '学习卡片',
+                  subtitle: '翻卡片复习收藏和最近学过的诗词。',
+                  icon: Icons.style_rounded,
+                  onTap: () => _openPage(context, const StudyCardsPage()),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 18),
-          _AdvancedToolsSection(
-            profilesAsync: profilesAsync,
-            services: services,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AdvancedToolsSection extends StatelessWidget {
-  const _AdvancedToolsSection({
-    required this.profilesAsync,
-    required this.services,
-  });
-
-  final AsyncValue<List<UserProfile>> profilesAsync;
-  final List<ServiceDescriptor> services;
-
-  @override
-  Widget build(BuildContext context) {
-    return SectionCard(
-      title: '家长管理',
-      subtitle: '资料、数据保护和详细报告放在这里，平时不用展开。',
-      child: ExpansionTile(
-        tilePadding: EdgeInsets.zero,
-        childrenPadding: EdgeInsets.zero,
-        title: const Text('展开家长管理'),
-        children: [
-          profilesAsync.when(
-            data:
-                (profiles) => Column(
-                  children: [
-                    _ProfileRow(label: '本地资料', value: '${profiles.length} 个'),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: FilledButton.tonalIcon(
-                        onPressed:
-                            () => _openPage(context, const ProfileSwitchPage()),
-                        icon: const Icon(Icons.people_alt_outlined),
-                        label: const Text('管理学习资料'),
-                      ),
-                    ),
-                  ],
-                ),
-            loading: () => const LinearProgressIndicator(),
-            error:
-                (error, _) => Text(
-                  UserFacingErrorMapper.parentMessage(
-                    error,
-                    fallbackMessage: '资料加载失败，请稍后重试。',
-                  ),
-                ),
-          ),
-          const SizedBox(height: 12),
-          const SyncStatusCard(),
-          const SizedBox(height: 12),
-          ExpansionTile(
-            tilePadding: EdgeInsets.zero,
-            childrenPadding: EdgeInsets.zero,
-            title: const Text('成长与历史'),
-            subtitle: const Text('详细报告和历史记录给家长查看。'),
-            children: [
-              const _GrowthReportsEntry(),
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  onPressed:
-                      () => _openPage(context, const LearningHistoryPage()),
-                  icon: const Icon(Icons.history_rounded),
-                  label: const Text('学习历史'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: () => _openPage(context, const SyncAccountPage()),
-              icon: const Icon(Icons.cloud_sync_rounded),
-              label: const Text('备份账号'),
+          SectionCard(
+            title: '我的设置',
+            child: _ActionTile(
+              title: '应用设置',
+              subtitle: null,
+              icon: Icons.settings_rounded,
+              onTap: () => _openPage(context, const SettingsPage()),
             ),
           ),
-          const SizedBox(height: 12),
-          if (AppEnvironment.diagnosticsEnabled)
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              title: const Text('服务状态'),
-              subtitle: const Text('诊断模式下查看服务能力。'),
-              children: services
-                  .map(
-                    (service) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(
-                        service.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Text(
-                        service.description,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: StatusChip(capability: service.capability),
-                    ),
-                  )
-                  .toList(growable: false),
-            ),
         ],
       ),
     );
@@ -1788,8 +1672,8 @@ class _StageTrendPointActionPanel extends StatelessWidget {
                 in filteredReports ?? const <PracticeReportSummary>[])
               _StageTrendActionTile(
                 icon: Icons.assessment_rounded,
-                title: '练习结果 #${report.id} · ${report.totalScore} 分',
-                subtitle: '${report.mode.label} · ${report.poemTitle}',
+                title: '${report.poemTitle} · ${report.totalScore} 分',
+                subtitle: '${report.mode.label}练习结果',
                 contributionLabels: stageContributionLabelsForReport(report),
                 highlighted: highlightedActionKey == 'report:${report.id}',
                 onTap: () {
@@ -1818,8 +1702,8 @@ class _StageTrendPointActionPanel extends StatelessWidget {
             for (final wrong in filteredWrongs ?? const <WrongQuestionEntry>[])
               _StageTrendActionTile(
                 icon: Icons.rule_folder_outlined,
-                title: '错题 #${wrong.id} · ${wrong.mistakeType.label}',
-                subtitle: '${wrong.questionType.label} · ${wrong.poemTitle}',
+                title: '${wrong.poemTitle} · ${wrong.mistakeType.label}',
+                subtitle: '${wrong.questionType.label}错题',
                 contributionLabels: stageContributionLabelsForWrong(wrong),
                 highlighted: highlightedActionKey == 'wrong:${wrong.id}',
                 onTap: () {
@@ -1848,9 +1732,9 @@ class _StageTrendPointActionPanel extends StatelessWidget {
             for (final record in filteredRecords ?? const <LearningRecord>[])
               _StageTrendActionTile(
                 icon: Icons.play_lesson_rounded,
-                title: '练习记录 #${record.id} · ${record.score ?? '--'} 分',
-                subtitle:
-                    '${learningModeLabel(record.mode)} · ${record.poemTitle.isEmpty ? '本关练习' : record.poemTitle}',
+                title:
+                    '${record.poemTitle.isEmpty ? '本关练习' : record.poemTitle} · ${record.score ?? '--'} 分',
+                subtitle: learningModeLabel(record.mode),
                 contributionLabels: stageContributionLabelsForRecord(record),
                 highlighted: highlightedActionKey == 'record:${record.id}',
                 onTap: () {
@@ -2547,15 +2431,9 @@ class _GrowthReportsEntry extends StatelessWidget {
 }
 
 class _ProfileHeader extends StatelessWidget {
-  const _ProfileHeader({
-    required this.profile,
-    required this.onOpenSettings,
-    required this.onSwitchProfile,
-  });
+  const _ProfileHeader({required this.profile});
 
   final UserProfile profile;
-  final VoidCallback onOpenSettings;
-  final VoidCallback onSwitchProfile;
 
   @override
   Widget build(BuildContext context) {
@@ -2564,40 +2442,20 @@ class _ProfileHeader extends StatelessWidget {
     return SectionCard(
       title: nickname,
       subtitle: profile.tagline.trim().isEmpty ? '今天也和古诗做朋友' : profile.tagline,
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 34,
-            backgroundColor: const Color(0xFFE6B949),
-            child: Text(
-              initial,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 26,
-                fontWeight: FontWeight.w800,
-              ),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: CircleAvatar(
+          radius: 34,
+          backgroundColor: const Color(0xFFE6B949),
+          child: Text(
+            initial,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 8,
-              children: [
-                FilledButton.tonalIcon(
-                  onPressed: onSwitchProfile,
-                  icon: const Icon(Icons.group_outlined),
-                  label: const Text('切换资料'),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: onOpenSettings,
-                  icon: const Icon(Icons.settings_rounded),
-                  label: const Text('设置'),
-                ),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -2635,13 +2493,13 @@ class _ProfileRow extends StatelessWidget {
 class _ActionTile extends StatelessWidget {
   const _ActionTile({
     required this.title,
-    required this.subtitle,
+    this.subtitle,
     required this.icon,
     required this.onTap,
   });
 
   final String title;
-  final String subtitle;
+  final String? subtitle;
   final IconData icon;
   final VoidCallback onTap;
 
@@ -2654,7 +2512,10 @@ class _ActionTile extends StatelessWidget {
         child: Icon(icon, color: Theme.of(context).colorScheme.primary),
       ),
       title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      subtitle:
+          subtitle == null
+              ? null
+              : Text(subtitle!, maxLines: 2, overflow: TextOverflow.ellipsis),
       trailing: const Icon(Icons.chevron_right_rounded),
       onTap: onTap,
     );

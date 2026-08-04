@@ -22,11 +22,10 @@ void main() {
     );
   });
 
-  testWidgets('floating source banner collapses after a short highlight', (
+  testWidgets('floating source banner disappears after a short highlight', (
     tester,
   ) async {
     final stageLabel = challengeStageLabel('jielong_entry');
-    final sourceLabel = stageScopeSourceLabel('growth-report')!;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -44,7 +43,8 @@ void main() {
     await tester.pump(const Duration(seconds: 4));
     await tester.pumpAndSettle();
 
-    expect(find.text('$sourceLabel · $stageLabel'), findsOneWidget);
+    expect(find.textContaining(stageLabel), findsNothing);
+    expect(find.byType(StageScopeFloatingBanner), findsOneWidget);
   });
 
   testWidgets('detail source panel shows floating banner with stage context', (

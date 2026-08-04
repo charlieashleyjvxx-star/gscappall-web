@@ -417,7 +417,7 @@ class _PinyinLine extends StatelessWidget {
           character: String.fromCharCode(rune),
           pinyin:
               _isCjk(rune) && tokenIndex < tokens.length
-                  ? _normalizePinyinToken(tokens[tokenIndex++])
+                  ? tokens[tokenIndex++]
                   : '',
           textStyle: textStyle,
           pinyinStyle: pinyinStyle,
@@ -459,10 +459,6 @@ class _PinyinLine extends StatelessWidget {
 
   bool _isCjk(int rune) {
     return _isCjkRune(rune);
-  }
-
-  String _normalizePinyinToken(String token) {
-    return token == 'é' ? 'e' : token;
   }
 
   double _characterCellWidth(BuildContext context) {

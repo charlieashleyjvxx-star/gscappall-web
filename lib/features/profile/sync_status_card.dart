@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/app_providers.dart';
+import '../../core/user_facing_error.dart';
 import '../../domain/sync/sync_models.dart';
 import '../../shared/widgets/section_card.dart';
 import 'sync_account_page.dart';
@@ -44,7 +45,12 @@ class _SyncStatusBody extends ConsumerWidget {
         (settings.syncAccountId.trim().isEmpty ||
             settings.syncAuthToken.trim().isEmpty ||
             settings.syncRefreshToken.trim().isEmpty);
-    final detail = needsLogin ? '请先登录备份账号，再进行数据备份。' : _syncDetailText(snapshot);
+    final detail =
+        !networkEnabled
+            ? '当前版本暂不支持网络备份，学习记录仍保存在本机。'
+            : needsLogin
+            ? '请先登录备份账号，再进行数据备份。'
+            : _syncDetailText(snapshot);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -117,7 +123,7 @@ class _SyncStatusBody extends ConsumerWidget {
               children: [
                 FilledButton.icon(
                   onPressed:
-                      snapshot.isRunning
+                      !networkEnabled || snapshot.isRunning
                           ? null
                           : () async {
                             final report = await ref
@@ -144,7 +150,13 @@ class _SyncStatusBody extends ConsumerWidget {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                           : const Icon(Icons.sync_rounded),
-                  label: Text(snapshot.isRunning ? '备份中' : '立即备份'),
+                  label: Text(
+                    !networkEnabled
+                        ? '备份暂不可用'
+                        : snapshot.isRunning
+                        ? '备份中'
+                        : '立即备份',
+                  ),
                 ),
                 TextButton.icon(
                   onPressed:
@@ -189,8 +201,9 @@ class _SyncLogPreview extends StatelessWidget {
                 '${_syncRunStateLabel(log.state)} · ${_syncTimeLabel(log.startedAt)}',
               ),
               subtitle: Text(
-                log.errorMessage ??
-                    '${syncRunTriggerLabel(log.trigger)} · 上传 ${log.pushedCount} 条，取回 ${log.pulledCount} 条，冲突 ${log.conflictCount} 个',
+                log.errorMessage == null
+                    ? '${syncRunTriggerLabel(log.trigger)} · 上传 ${log.pushedCount} 条，取回 ${log.pulledCount} 条，冲突 ${log.conflictCount} 个'
+                    : formatSyncError(log.errorMessage!),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -306,24 +319,7 @@ class _SyncRow extends StatelessWidget {
 }
 
 String formatSyncError(Object error) {
-  final raw = error.toString();
-  if (raw.contains('SocketException') ||
-      raw.contains('HandshakeException') ||
-      raw.contains('Failed host lookup')) {
-    return '网络不可用，请稍后重试。';
-  }
-  if (raw.contains('Unauthorized') ||
-      raw.contains('401') ||
-      raw.contains('403')) {
-    return '账号登录状态已失效，请重新登录后再备份。';
-  }
-  if (raw.contains('timeout') || raw.contains('TimeoutException')) {
-    return '备份请求超时，请检查网络后重试。';
-  }
-  if (raw.contains('UnsupportedError')) {
-    return '网络备份服务暂未开启。';
-  }
-  return '备份失败，请稍后重试。';
+  return UserFacingErrorMapper.message(error, fallbackMessage: '备份失败，请稍后重试。');
 }
 
 String _syncTimeLabel(DateTime? value) {

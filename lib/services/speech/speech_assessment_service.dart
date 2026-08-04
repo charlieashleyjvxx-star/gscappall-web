@@ -70,8 +70,8 @@ abstract class SpeechAssessmentProvider {
   Future<SpeechAssessmentResult> assess(SpeechAssessmentRequest request);
 }
 
-class MockSpeechAssessmentProvider implements SpeechAssessmentProvider {
-  const MockSpeechAssessmentProvider({
+class LocalSpeechAssessmentProvider implements SpeechAssessmentProvider {
+  const LocalSpeechAssessmentProvider({
     this.heuristicScoringService = const LocalHeuristicSpeechScoringService(),
   });
 
@@ -79,8 +79,8 @@ class MockSpeechAssessmentProvider implements SpeechAssessmentProvider {
 
   @override
   ServiceCapability get capability => const ServiceCapability(
-    state: ServiceState.placeholder,
-    message: '已切到云端语音评测架构，当前使用 Mock Provider 跑通朗读/背诵链路；sherpa_onnx 仅作为离线辅助识别。',
+    state: ServiceState.available,
+    message: '当前使用本地练习评估，可继续完成朗读和背诵反馈。',
   );
 
   @override
@@ -107,14 +107,14 @@ class MockSpeechAssessmentProvider implements SpeechAssessmentProvider {
       extraChars: score.extraChars,
       mismatches: score.mismatches,
       mode: request.mode,
-      engine: 'mock-assessment',
+      engine: 'local-practice-assessment',
       assessmentBasis: hasAudio ? 'audio_with_aux_text' : 'aux_text_only',
       rawAttemptText: request.attemptText,
       normalizedText: normalized,
       audioFilePath: request.audioFilePath,
       confidence: _estimateConfidence(score),
       rawProviderPayload: <String, Object?>{
-        'provider': 'mock',
+        'provider': 'local',
         'mode': request.mode.name,
         'hasAudio': hasAudio,
         'metadata': request.metadata,
@@ -123,8 +123,8 @@ class MockSpeechAssessmentProvider implements SpeechAssessmentProvider {
   }
 
   String _buildFeedbackPrefix(SpeechAssessmentRequest request, bool hasAudio) {
-    final source = hasAudio ? '已收到录音文件，' : '当前未拿到录音文件，';
-    return '$source${request.mode.label}评分先由 Mock 评测引擎生成，后续可替换为云端发音评测。';
+    final source = hasAudio ? '已结合本次录音，' : '已根据填写内容，';
+    return '$source生成${request.mode.label}练习反馈。';
   }
 
   double _estimateConfidence(SpeechScore score) {

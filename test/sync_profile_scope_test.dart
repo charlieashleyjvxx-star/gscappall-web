@@ -377,7 +377,7 @@ void main() {
       expect(roundTripped.favorites.single.metadata.deletedAt, deletedAt);
     });
 
-    test('CloudSyncApi exposes adapter shape without network', () async {
+    test('CloudSyncApi rejects sync operations without network', () async {
       const api = CloudSyncApi();
       final config = CloudSyncApiConfig(
         baseUri: Uri.parse('https://example.invalid/api'),
@@ -388,7 +388,10 @@ void main() {
         config.endpoint(config.pushPath).toString(),
         'https://example.invalid/sync/push',
       );
-      await expectLater(api.fetchCapabilities(), completes);
+      await expectLater(
+        api.fetchCapabilities(),
+        throwsA(isA<UnsupportedError>()),
+      );
     });
 
     test('legacy profile-free records default to primary profile', () {

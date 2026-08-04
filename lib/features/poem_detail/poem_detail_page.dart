@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,12 +8,10 @@ import '../../app/app_providers.dart';
 import '../../app/app_design.dart';
 import '../../core/user_facing_error.dart';
 import '../../domain/poem.dart';
+import '../../services/audio/audio_player_service.dart';
 import '../../shared/widgets/poem_pinyin_text.dart';
 import '../../shared/widgets/section_card.dart';
-import '../dictation/dictation_page.dart';
 import '../reading/reading_placeholder_page.dart';
-import '../recite/recite_placeholder_page.dart';
-import '../wrong_book/wrong_book_placeholder_page.dart';
 
 enum _DetailTab {
   content('原文'),
@@ -37,11 +38,21 @@ class PoemDetailPage extends ConsumerStatefulWidget {
 class _PoemDetailPageState extends ConsumerState<PoemDetailPage> {
   _DetailTab _tab = _DetailTab.annotation;
   late Future<_DetailViewData?> _future;
+  late final AudioPlayerService _audioPlayerService;
+  _DetailTab? _playingTab;
+  bool _isPreparingNarration = false;
 
   @override
   void initState() {
     super.initState();
+    _audioPlayerService = ref.read(audioPlayerServiceProvider);
     _future = _load();
+  }
+
+  @override
+  void dispose() {
+    unawaited(_audioPlayerService.stop());
+    super.dispose();
   }
 
   @override
@@ -122,7 +133,6 @@ class _PoemDetailPageState extends ConsumerState<PoemDetailPage> {
                   SizedBox(height: sectionGap),
                   SectionCard(
                     title: '原文',
-                    subtitle: compactLayout ? null : '先看完整诗句，再选下一步练习。',
                     child: PoemPinyinText(
                       poem: detail.poem,
                       showPinyin: showPinyin,
@@ -132,9 +142,6 @@ class _PoemDetailPageState extends ConsumerState<PoemDetailPage> {
                   SizedBox(height: sectionGap),
                   _NextStepAdvice(
                     onOpenReading: () => _openReadingPractice(poem.id),
-                    onOpenRecite: () => _openRecitePractice(poem.id),
-                    onOpenDictation: _openDictationPractice,
-                    onOpenWrongBook: _openWrongBook,
                   ),
                   SizedBox(height: sectionGap),
                   SingleChildScrollView(
@@ -149,6 +156,9 @@ class _PoemDetailPageState extends ConsumerState<PoemDetailPage> {
                                 label: Text(tab.label),
                                 selected: _tab == tab,
                                 onSelected: (_) {
+                                  if (_playingTab != null) {
+                                    unawaited(_stopNarration());
+                                  }
                                   setState(() {
                                     _tab = tab;
                                   });
@@ -161,8 +171,30 @@ class _PoemDetailPageState extends ConsumerState<PoemDetailPage> {
                   ),
                   SizedBox(height: sectionGap),
                   SectionCard(
-                    title: '了解这首诗',
-                    subtitle: '想知道意思时再看这里。',
+                    title: _tab.label,
+                    trailing: IconButton.filledTonal(
+                      onPressed:
+                          _canNarrate(detail)
+                              ? () => _toggleNarration(detail)
+                              : null,
+                      tooltip:
+                          _playingTab == _tab
+                              ? '停止播放${_tab.label}'
+                              : '播放${_tab.label}',
+                      icon:
+                          _isPreparingNarration && _playingTab == _tab
+                              ? const SizedBox.square(
+                                dimension: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                              : Icon(
+                                _playingTab == _tab
+                                    ? Icons.stop_rounded
+                                    : Icons.volume_up_rounded,
+                              ),
+                    ),
                     child: Text(
                       _contentFor(detail),
                       style: Theme.of(
@@ -225,28 +257,112 @@ class _PoemDetailPageState extends ConsumerState<PoemDetailPage> {
     };
   }
 
+  String _narrationContentFor(_DetailViewData detail) {
+    final poem = detail.poem;
+    return switch (_tab) {
+      _DetailTab.content => poem.lines.join('\n'),
+      _DetailTab.annotation => poem.annotation,
+      _DetailTab.translation => poem.translation,
+      _DetailTab.appreciation => poem.appreciation,
+      _DetailTab.author => poem.authorIntro,
+      _DetailTab.extension => poem.extension,
+    }.trim();
+  }
+
+  bool _canNarrate(_DetailViewData detail) {
+    return !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android &&
+        !_isPreparingNarration &&
+        _narrationContentFor(detail).isNotEmpty;
+  }
+
+  Future<void> _toggleNarration(_DetailViewData detail) async {
+    if (_playingTab == _tab) {
+      await _stopNarration();
+      return;
+    }
+
+    await _audioPlayerService.stop();
+    final narrationTab = _tab;
+    final narrationText = _narrationContentFor(detail);
+    if (narrationText.isEmpty || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _playingTab = narrationTab;
+      _isPreparingNarration = true;
+    });
+
+    try {
+      final synthesized = await ref
+          .read(textToSpeechServiceProvider)
+          .synthesizeToFile(
+            text:
+                narrationTab == _DetailTab.content
+                    ? _poeticNarrationText(detail.poem.lines)
+                    : narrationText,
+            cacheKey:
+                'poem_${detail.poem.id}_${narrationTab.name}_child_voice_v2',
+            speechRate: narrationTab == _DetailTab.content ? 0.82 : 0.9,
+            pitch: narrationTab == _DetailTab.content ? 1.03 : 1.0,
+          );
+      if (!mounted || _playingTab != narrationTab) {
+        return;
+      }
+      setState(() {
+        _isPreparingNarration = false;
+      });
+      await _audioPlayerService.play(synthesized.filePath);
+    } catch (error) {
+      if (mounted && _playingTab == narrationTab) {
+        final message = UserFacingErrorMapper.message(
+          error,
+          fallbackMessage: '内容语音暂时无法播放，请稍后重试。',
+        );
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(message)));
+      }
+    } finally {
+      if (mounted && _playingTab == narrationTab) {
+        setState(() {
+          _playingTab = null;
+          _isPreparingNarration = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _stopNarration() async {
+    await _audioPlayerService.stop();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _playingTab = null;
+      _isPreparingNarration = false;
+    });
+  }
+
+  String _poeticNarrationText(Iterable<String> lines) {
+    return lines
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .map(
+          (line) => line
+              .replaceAll('，', '，  ')
+              .replaceAll('。', '。   ')
+              .replaceAll('？', '？   ')
+              .replaceAll('！', '！   '),
+        )
+        .join('   ');
+  }
+
   void _openReadingPractice(int poemId) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => ReadingPlaceholderPage(poemId: poemId)),
     );
-  }
-
-  void _openRecitePractice(int poemId) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => RecitePlaceholderPage(poemId: poemId)),
-    );
-  }
-
-  void _openDictationPractice() {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => const DictationPage()));
-  }
-
-  void _openWrongBook() {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => const WrongBookPlaceholderPage()));
   }
 }
 
@@ -321,83 +437,24 @@ class _PoemHeaderCard extends StatelessWidget {
 }
 
 class _NextStepAdvice extends StatelessWidget {
-  const _NextStepAdvice({
-    required this.onOpenReading,
-    required this.onOpenRecite,
-    required this.onOpenDictation,
-    required this.onOpenWrongBook,
-  });
+  const _NextStepAdvice({required this.onOpenReading});
 
   final VoidCallback onOpenReading;
-  final VoidCallback onOpenRecite;
-  final VoidCallback onOpenDictation;
-  final VoidCallback onOpenWrongBook;
 
   @override
   Widget build(BuildContext context) {
-    final compactLayout =
-        MediaQuery.sizeOf(context).width < AppLayout.compactWidth;
     return SectionCard(
       title: '开始练习',
-      subtitle: compactLayout ? null : '选择适合现在进度的练习。',
       padding: const EdgeInsets.all(AppSpacing.large),
-      child: _CompactAdviceGrid(
-        onOpenReading: onOpenReading,
-        onOpenRecite: onOpenRecite,
-        onOpenDictation: onOpenDictation,
-        onOpenWrongBook: onOpenWrongBook,
+      child: SizedBox(
+        width: double.infinity,
+        height: 56,
+        child: FilledButton.icon(
+          onPressed: onOpenReading,
+          icon: const Icon(Icons.graphic_eq_rounded),
+          label: const Text('开始朗读'),
+        ),
       ),
-    );
-  }
-}
-
-class _CompactAdviceGrid extends StatelessWidget {
-  const _CompactAdviceGrid({
-    required this.onOpenReading,
-    required this.onOpenRecite,
-    required this.onOpenDictation,
-    required this.onOpenWrongBook,
-  });
-
-  final VoidCallback onOpenReading;
-  final VoidCallback onOpenRecite;
-  final VoidCallback onOpenDictation;
-  final VoidCallback onOpenWrongBook;
-
-  @override
-  Widget build(BuildContext context) {
-    final items = <(IconData, String, VoidCallback)>[
-      (Icons.graphic_eq_rounded, '读一读', onOpenReading),
-      (Icons.auto_stories_rounded, '背一背', onOpenRecite),
-      (Icons.edit_note_rounded, '练听写', onOpenDictation),
-      (Icons.inventory_2_rounded, '去复习', onOpenWrongBook),
-    ];
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final itemWidth = (constraints.maxWidth - 8) / 2;
-        return Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final item in items)
-              SizedBox(
-                width: itemWidth,
-                child: FilledButton.tonalIcon(
-                  onPressed: item.$3,
-                  icon: Icon(item.$1, size: 18),
-                  label: Text(item.$2),
-                  style: FilledButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 10,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
     );
   }
 }

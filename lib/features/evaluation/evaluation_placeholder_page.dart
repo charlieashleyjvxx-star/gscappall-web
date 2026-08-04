@@ -205,13 +205,18 @@ class _EvaluationPlaceholderPageState
               const SizedBox(height: 16),
               TextField(
                 controller: _answerController,
+                onChanged: (_) {
+                  if (preview != null) {
+                    setState(() => _draftResults.remove(_currentIndex));
+                  }
+                },
                 maxLines: 3,
                 minLines: 3,
                 textInputAction: TextInputAction.newline,
                 decoration: InputDecoration(
                   hintText:
                       _mode == PracticeMode.dictation
-                          ? '把这一句诗默写在这里，校验后会自动进入下一题'
+                          ? '把这一句诗默写在这里，先检查再进入下一题'
                           : '在这里输入你的答案',
                 ),
               ),
@@ -246,17 +251,11 @@ class _EvaluationPlaceholderPageState
           ),
         ),
         const SizedBox(height: 18),
-        Row(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _currentIndex == 0 ? null : _previousQuestion,
-                icon: const Icon(Icons.chevron_left_rounded),
-                label: const Text('上一题'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
+            SizedBox(
+              height: 56,
               child: FilledButton.icon(
                 onPressed:
                     _isSubmitting
@@ -265,17 +264,36 @@ class _EvaluationPlaceholderPageState
                             ? _checkAndContinue
                             : _nextOrSubmitEvaluation),
                 icon: Icon(
-                  _currentIndex >= session.questions.length - 1
+                  _mode == PracticeMode.dictation && preview == null
+                      ? Icons.fact_check_outlined
+                      : _currentIndex >= session.questions.length - 1
                       ? Icons.flag_rounded
                       : Icons.chevron_right_rounded,
                 ),
                 label: Text(
-                  _currentIndex >= session.questions.length - 1
+                  _mode == PracticeMode.dictation && preview == null
+                      ? '检查这一题'
+                      : _currentIndex >= session.questions.length - 1
                       ? (_mode == PracticeMode.dictation ? '完成听写' : '提交测评')
-                      : (_mode == PracticeMode.dictation ? '校验并下一题' : '下一题'),
+                      : '下一题',
                 ),
               ),
             ),
+            if (_currentIndex > 0)
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: const Text('更多操作'),
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _previousQuestion,
+                      icon: const Icon(Icons.chevron_left_rounded),
+                      label: const Text('返回上一题'),
+                    ),
+                  ),
+                ],
+              ),
           ],
         ),
       ],
@@ -309,22 +327,22 @@ class _EvaluationPlaceholderPageState
             ],
           ),
           const SizedBox(height: 16),
-          Row(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
+              SizedBox(
+                height: 56,
                 child: FilledButton.icon(
                   onPressed: () => _openResultPage(report),
                   icon: const Icon(Icons.assessment_outlined),
                   label: const Text('查看结果页'),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _restartSession,
-                  icon: const Icon(Icons.replay_rounded),
-                  label: const Text('再练一次'),
-                ),
+              const SizedBox(height: 4),
+              TextButton.icon(
+                onPressed: _restartSession,
+                icon: const Icon(Icons.replay_rounded),
+                label: const Text('再练一次'),
               ),
             ],
           ),
@@ -405,6 +423,19 @@ class _EvaluationPlaceholderPageState
       return;
     }
 
+    final existingResult = _draftResults[_currentIndex];
+    if (existingResult != null) {
+      if (_currentIndex >= session.questions.length - 1) {
+        await _submitSession();
+        return;
+      }
+      setState(() {
+        _currentIndex += 1;
+        _syncAnswerController();
+      });
+      return;
+    }
+
     _saveCurrentAnswer();
     final result = _practiceRepository.evaluateAnswer(
       question: session.questions[_currentIndex],
@@ -417,22 +448,12 @@ class _EvaluationPlaceholderPageState
         SnackBar(
           content: Text(
             result.isCorrect
-                ? '本句正确，进入下一题。'
+                ? '本句正确，可以进入下一题。'
                 : '已记录为 ${result.mistakeType?.label ?? '待复习'}。',
           ),
         ),
       );
     }
-
-    if (_currentIndex >= session.questions.length - 1) {
-      await _submitSession();
-      return;
-    }
-
-    setState(() {
-      _currentIndex += 1;
-      _syncAnswerController();
-    });
   }
 
   Future<void> _nextOrSubmitEvaluation() async {
@@ -984,22 +1005,18 @@ class _PracticeHeaderActions extends StatelessWidget {
       ),
     ];
 
-    if (compactLayout) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          primary,
-          ExpansionTile(
-            tilePadding: EdgeInsets.zero,
-            childrenPadding: EdgeInsets.zero,
-            title: const Text('更多'),
-            children: [Wrap(spacing: 8, runSpacing: 8, children: secondary)],
-          ),
-        ],
-      );
-    }
-
-    return Wrap(spacing: 12, runSpacing: 12, children: [primary, ...secondary]);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        primary,
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: EdgeInsets.zero,
+          title: const Text('更多'),
+          children: [Wrap(spacing: 8, runSpacing: 8, children: secondary)],
+        ),
+      ],
+    );
   }
 }
 

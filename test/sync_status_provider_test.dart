@@ -55,7 +55,14 @@ void main() {
     ''');
 
       final container = ProviderContainer(
-        overrides: [appDatabaseProvider.overrideWithValue(database)],
+        overrides: [
+          appDatabaseProvider.overrideWithValue(database),
+          syncRemoteRepositoryProvider.overrideWithValue(
+            _FakeSyncRemoteRepository(
+              acceptedCounts: const {SyncResourceType.favorites: 1},
+            ),
+          ),
+        ],
       );
       addTearDown(container.dispose);
 
@@ -79,6 +86,25 @@ void main() {
       expect(synced.logs.first.trigger, SyncRunTrigger.manual);
     },
   );
+
+  test('disabled network never reports a placeholder sync success', () async {
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+    await database.selectList('SELECT 1;');
+
+    final container = ProviderContainer(
+      overrides: [appDatabaseProvider.overrideWithValue(database)],
+    );
+    addTearDown(container.dispose);
+
+    final report =
+        await container.read(syncStatusProvider.notifier).synchronize();
+    final status = await container.read(syncStatusProvider.future);
+
+    expect(report, isNull);
+    expect(status.lastRunState, isNull);
+    expect(status.lastErrorMessage, '当前版本暂不支持网络备份。');
+  });
 
   test('network sync prompts login before manual synchronize', () async {
     final database = AppDatabase.forTesting(NativeDatabase.memory());

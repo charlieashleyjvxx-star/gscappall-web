@@ -11,9 +11,7 @@ import '../poem_detail/poem_detail_page.dart';
 import '../study_cards/study_cards_page.dart';
 
 class HomePage extends ConsumerWidget {
-  const HomePage({super.key, required this.onSelectTab});
-
-  final ValueChanged<int> onSelectTab;
+  const HomePage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -37,11 +35,6 @@ class HomePage extends ConsumerWidget {
                 pagePadding + AppSpacing.small,
               ),
               children: [
-                _HeroBanner(
-                  onOpenLibrary: () => onSelectTab(1),
-                  onOpenPractice: () => onSelectTab(2),
-                ),
-                const SizedBox(height: AppSpacing.medium),
                 todayAsync.when(
                   data: (bundle) {
                     return SectionCard(
@@ -104,66 +97,6 @@ class _TodayTaskLoading extends StatelessWidget {
         SizedBox(height: 12),
         Text('正在准备今天要学的诗。'),
       ],
-    );
-  }
-}
-
-class _HeroBanner extends StatelessWidget {
-  const _HeroBanner({
-    required this.onOpenLibrary,
-    required this.onOpenPractice,
-  });
-
-  final VoidCallback onOpenLibrary;
-  final VoidCallback onOpenPractice;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compactLayout = constraints.maxWidth < AppLayout.compactWidth;
-        return Card(
-          child: Padding(
-            padding: EdgeInsets.all(
-              compactLayout ? AppSpacing.large : AppSpacing.xLarge,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '今天从哪里开始？',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.small),
-                Text(
-                  '先挑一首，也可以直接练习。',
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-                const SizedBox(height: AppSpacing.large),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: onOpenLibrary,
-                      icon: const Icon(Icons.library_books_rounded),
-                      label: const Text('去诗词库'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: onOpenPractice,
-                      icon: const Icon(Icons.edit_note_rounded),
-                      label: const Text('去练习'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 }

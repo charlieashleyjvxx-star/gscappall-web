@@ -37,7 +37,6 @@ class _ProfileSwitchPageState extends ConsumerState<ProfileSwitchPage> {
           if (profiles.isEmpty) {
             return EmptyState(
               title: '还没有本地资料',
-              description: '先创建一个学习伙伴资料，再继续使用。',
               icon: Icons.group_outlined,
               action: FilledButton(
                 onPressed: _createProfile,
@@ -51,18 +50,6 @@ class _ProfileSwitchPageState extends ConsumerState<ProfileSwitchPage> {
           return ListView(
             padding: const EdgeInsets.all(20),
             children: [
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF9F3E6),
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: const Text(
-                  '当前切换的是本机里的学习伙伴资料。昵称和展示会随之切换，学习数据按资料独立保存。',
-                  style: TextStyle(height: 1.6),
-                ),
-              ),
-              const SizedBox(height: 18),
               ...profiles.map(
                 (profile) => _ProfileTile(
                   profile: profile,
@@ -134,7 +121,7 @@ class _ProfileSwitchPageState extends ConsumerState<ProfileSwitchPage> {
       builder: (context) {
         return AlertDialog(
           title: const Text('删除本地资料'),
-          content: const Text('会删除这张本地资料卡，但当前学习数据仍保留在本机数据库里。'),
+          content: const Text('会删除这张本地资料卡，但当前学习数据仍保留在本机。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -342,13 +329,6 @@ class _ProfileTile extends StatelessWidget {
                         ),
                       ],
                     ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    profile.tagline,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ),

@@ -7,6 +7,7 @@ import '../../domain/poem.dart';
 import '../../services/game/challenge_progress_service.dart';
 import '../../services/game/feihualing_service.dart';
 import '../../shared/widgets/section_card.dart';
+import 'game_session_widgets.dart';
 
 class FeihualingPage extends ConsumerStatefulWidget {
   const FeihualingPage({super.key});
@@ -105,154 +106,173 @@ class _FeihualingPageState extends ConsumerState<FeihualingPage> {
         ),
         const SizedBox(height: 16),
         if (_report != null) ...[
-          _FeihualingReportCard(
-            report: _report!,
-            pointsAwarded: _pointsAwarded,
+          GameResultCard(
+            summary: _report!.summary,
+            metrics: {
+              '主题': _report!.themeCharacter,
+              '句数': '${_report!.lineCount}',
+              '得分': '${_report!.score}',
+              '星星': _pointsAwarded ? '已获得' : '今天已记录',
+            },
+            primaryLabel: '再来一局',
+            onPrimary: () => _resetRound(theme),
+            secondaryLabel: '换一个主题',
+            onSecondary: _backToThemes,
           ),
-          const SizedBox(height: 16),
-        ],
-        SectionCard(
-          title: '接一句',
-          subtitle: '句子里要有“${theme.character}”。',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: _controller,
-                minLines: 1,
-                maxLines: 2,
-                decoration: InputDecoration(
-                  labelText: '输入带“${theme.character}”的诗句',
-                  hintText:
-                      suggestions.isEmpty ? '例如输入完整诗句' : suggestions.first.text,
-                  border: const OutlineInputBorder(),
-                ),
-                onSubmitted: (_) => _submit(service, bank, theme),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  FilledButton.icon(
-                    onPressed: () => _submit(service, bank, theme),
-                    icon: const Icon(Icons.local_florist_rounded),
-                    label: const Text('答一句'),
-                  ),
-                  FilledButton.tonalIcon(
-                    onPressed:
+        ] else ...[
+          SectionCard(
+            title: '接一句',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: _controller,
+                  minLines: 1,
+                  maxLines: 2,
+                  decoration: InputDecoration(
+                    labelText: '输入带“${theme.character}”的诗句',
+                    hintText:
                         suggestions.isEmpty
-                            ? null
-                            : () {
-                              _controller.text = suggestions.first.text;
-                              _submit(service, bank, theme);
-                            },
-                    icon: const Icon(Icons.tips_and_updates_rounded),
-                    label: const Text('用提示'),
+                            ? '例如输入完整诗句'
+                            : suggestions.first.text,
+                    border: const OutlineInputBorder(),
                   ),
-                  OutlinedButton.icon(
-                    onPressed: () => _resetRound(theme),
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('重开本题'),
-                  ),
-                  TextButton(
-                    onPressed: () => _backToThemes(),
-                    child: const Text('换主题'),
+                  onSubmitted: (_) => _submit(service, bank, theme),
+                ),
+                const SizedBox(height: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: () => _submit(service, bank, theme),
+                      icon: const Icon(Icons.local_florist_rounded),
+                      label: const Text('答一句'),
+                    ),
+                    TextButton.icon(
+                      onPressed:
+                          suggestions.isEmpty
+                              ? null
+                              : () {
+                                _controller.text = suggestions.first.text;
+                              },
+                      icon: const Icon(Icons.tips_and_updates_rounded),
+                      label: const Text('给我提示'),
+                    ),
+                    ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      title: const Text('更多操作'),
+                      children: [
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: () => _resetRound(theme),
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text('重新开始本局'),
+                          ),
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            onPressed: _backToThemes,
+                            child: const Text('换一个主题'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                if (_message != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _message!,
+                    style: TextStyle(
+                      color:
+                          _message!.startsWith('答对')
+                              ? const Color(0xFF3F7D45)
+                              : Theme.of(context).colorScheme.error,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ],
-              ),
-              if (_message != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _message!,
-                  style: TextStyle(
-                    color:
-                        _message!.startsWith('答对')
-                            ? const Color(0xFF3F7D45)
-                            : Theme.of(context).colorScheme.error,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
               ],
-            ],
+            ),
           ),
-        ),
-        const SizedBox(height: 16),
-        SectionCard(
-          title: '提示',
-          subtitle: '想不起来时看一眼。',
-          child:
-              suggestions.isEmpty
-                  ? const Text('暂无候选，可以换主题继续。')
-                  : Column(
-                    children: suggestions
-                        .map(
-                          (line) => ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(line.text),
-                            subtitle: Text(
-                              '《${line.poem.title}》${line.poem.author}',
+          const SizedBox(height: 16),
+          SectionCard(
+            title: '提示',
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: const Text('展开提示'),
+              children:
+                  suggestions.isEmpty
+                      ? const [Text('暂无候选，可以换主题继续。')]
+                      : suggestions
+                          .map(
+                            (line) => ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(line.text),
+                              subtitle: Text(
+                                '《${line.poem.title}》${line.poem.author}',
+                              ),
+                              trailing: const Icon(Icons.chevron_right_rounded),
+                              onTap: () {
+                                _controller.text = line.text;
+                              },
                             ),
-                            trailing: const Icon(Icons.chevron_right_rounded),
-                            onTap: () {
-                              _controller.text = line.text;
-                            },
-                          ),
-                        )
-                        .toList(growable: false),
-                  ),
-        ),
-        const SizedBox(height: 16),
-        SectionCard(
-          title: '本轮答案',
-          subtitle: '完成 3 句就能得到星星。',
-          child:
-              _answers.isEmpty
-                  ? const Text('还没有答句。')
-                  : Column(
-                    children: _answers
-                        .asMap()
-                        .entries
-                        .map(
-                          (entry) => ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: CircleAvatar(
-                              backgroundColor: const Color(0xFFFFF2D6),
-                              child: Text('${entry.key + 1}'),
-                            ),
-                            title: Text(entry.value.text),
-                            subtitle: Text(
-                              '《${entry.value.poem.title}》${entry.value.poem.author}',
-                            ),
-                          ),
-                        )
-                        .toList(growable: false),
-                  ),
-        ),
-        const SizedBox(height: 16),
-        SectionCard(
-          title: '换个主题',
-          subtitle: '挑一个字继续挑战。',
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: themes
-                .take(10)
-                .map(
-                  (item) => ChoiceChip(
-                    label: Text(item.character),
-                    selected: item.character == theme.character,
-                    onSelected: (_) {
-                      setState(() {
-                        _theme = item;
-                        _resetRoundState();
-                      });
-                    },
-                  ),
-                )
-                .toList(growable: false),
+                          )
+                          .toList(growable: false),
+            ),
           ),
-        ),
+          const SizedBox(height: 16),
+          SectionCard(
+            title: '本轮答案',
+            child:
+                _answers.isEmpty
+                    ? const Text('还没有答句。')
+                    : Column(
+                      children: _answers
+                          .asMap()
+                          .entries
+                          .map(
+                            (entry) => ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: CircleAvatar(
+                                backgroundColor: const Color(0xFFFFF2D6),
+                                child: Text('${entry.key + 1}'),
+                              ),
+                              title: Text(entry.value.text),
+                              subtitle: Text(
+                                '《${entry.value.poem.title}》${entry.value.poem.author}',
+                              ),
+                            ),
+                          )
+                          .toList(growable: false),
+                    ),
+          ),
+          const SizedBox(height: 16),
+          SectionCard(
+            title: '换个主题',
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: themes
+                  .take(10)
+                  .map(
+                    (item) => ChoiceChip(
+                      label: Text(item.character),
+                      selected: item.character == theme.character,
+                      onSelected: (_) {
+                        setState(() {
+                          _theme = item;
+                          _resetRoundState();
+                        });
+                      },
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -380,15 +400,12 @@ class _ThemePicker extends StatelessWidget {
                   fontWeight: FontWeight.w900,
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text('选一个字，试着说出带这个字的诗句。'),
             ],
           ),
         ),
         const SizedBox(height: 16),
         SectionCard(
           title: '推荐主题',
-          subtitle: '点击一个主题开始答句。',
           child: Wrap(
             spacing: 10,
             runSpacing: 10,
@@ -459,39 +476,9 @@ class _FeihualingHero extends StatelessWidget {
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                const SizedBox(height: 4),
-                const Text('完成 3 句就能得到星星。'),
               ],
             ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FeihualingReportCard extends StatelessWidget {
-  const _FeihualingReportCard({
-    required this.report,
-    required this.pointsAwarded,
-  });
-
-  final FeihualingReport report;
-  final bool pointsAwarded;
-
-  @override
-  Widget build(BuildContext context) {
-    return SectionCard(
-      title: '本局结果',
-      subtitle: report.summary,
-      child: Wrap(
-        spacing: 10,
-        runSpacing: 10,
-        children: [
-          Chip(label: Text('主题 ${report.themeCharacter}')),
-          Chip(label: Text('句数 ${report.lineCount}')),
-          Chip(label: Text('得分 ${report.score}')),
-          Chip(label: Text(pointsAwarded ? '得星星' : '今天已记录')),
         ],
       ),
     );

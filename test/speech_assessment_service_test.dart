@@ -2,9 +2,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gscappall/services/speech/speech_assessment_service.dart';
 
 void main() {
-  group('MockSpeechAssessmentProvider', () {
+  group('LocalSpeechAssessmentProvider', () {
     test('returns normalized reading assessment result', () async {
-      const provider = MockSpeechAssessmentProvider();
+      const provider = LocalSpeechAssessmentProvider();
 
       final result = await provider.assess(
         const SpeechAssessmentRequest(
@@ -16,7 +16,7 @@ void main() {
         ),
       );
 
-      expect(result.engine, 'mock-assessment');
+      expect(result.engine, 'local-practice-assessment');
       expect(result.mode, SpeechAssessmentMode.reading);
       expect(result.assessmentBasis, 'audio_with_aux_text');
       expect(result.totalScore, greaterThanOrEqualTo(90));
@@ -28,7 +28,7 @@ void main() {
     test(
       'keeps recitation assessment separate from target correction',
       () async {
-        const provider = MockSpeechAssessmentProvider();
+        const provider = LocalSpeechAssessmentProvider();
 
         final result = await provider.assess(
           const SpeechAssessmentRequest(

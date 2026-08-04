@@ -29,6 +29,8 @@ abstract class TextToSpeechService {
     String locale = 'zh-CN',
     String? cacheKey,
     bool forceRegenerate = false,
+    double speechRate = 1.0,
+    double pitch = 1.0,
   });
 }
 
@@ -99,6 +101,8 @@ class PlatformTextToSpeechService implements TextToSpeechService {
     String locale = 'zh-CN',
     String? cacheKey,
     bool forceRegenerate = false,
+    double speechRate = 1.0,
+    double pitch = 1.0,
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       throw PlatformException(
@@ -124,6 +128,8 @@ class PlatformTextToSpeechService implements TextToSpeechService {
           'locale': locale,
           'cacheKey': cacheKey,
           'forceRegenerate': forceRegenerate,
+          'speechRate': speechRate,
+          'pitch': pitch,
         },
       );
       _applyStatus(status);

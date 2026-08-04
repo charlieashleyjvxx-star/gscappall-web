@@ -29,10 +29,16 @@
 powershell -ExecutionPolicy Bypass -File tools\build_android_release.ps1
 ```
 
-脚本先执行静态分析和全量测试，再生成按 ABI 拆分、Dart 混淆的 Release APK 与 AAB。符号文件保存在 `build/symbols/production`，发布后必须和对应版本一起归档。
+脚本先执行静态分析和全量测试，再生成按 ABI 拆分、Dart 混淆的 Release APK 与 AAB。每次构建都会生成唯一 `releaseId`，写入应用崩溃记录，并将符号文件保存在 `build/symbols/production/<releaseId>`。目录中的 `release-manifest.json` 记录了符号路径和还原命令，发布后必须和对应 AAB 一起归档。
 
 快速复建且跳过重复测试：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build_android_release.ps1 -SkipTests
+```
+
+收到脱敏崩溃堆栈后，使用同一 `releaseId` 目录中的架构符号文件还原，例如：
+
+```powershell
+flutter symbolize -i stack-trace.txt -d build\symbols\production\<releaseId>\app.android-arm64.symbols
 ```

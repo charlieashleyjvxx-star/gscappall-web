@@ -162,9 +162,11 @@ class EvaluationResultPage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 18),
-            Row(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
+                SizedBox(
+                  height: 56,
                   child: FilledButton.icon(
                     onPressed: () {
                       Navigator.of(context).pop(EvaluationResultAction.restart);
@@ -173,17 +175,15 @@ class EvaluationResultPage extends StatelessWidget {
                     label: const Text('再练一次'),
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.of(
-                        context,
-                      ).pop(EvaluationResultAction.openWrongBook);
-                    },
-                    icon: const Icon(Icons.rule_folder_outlined),
-                    label: const Text('去错题本'),
-                  ),
+                const SizedBox(height: 4),
+                TextButton.icon(
+                  onPressed: () {
+                    Navigator.of(
+                      context,
+                    ).pop(EvaluationResultAction.openWrongBook);
+                  },
+                  icon: const Icon(Icons.rule_folder_outlined),
+                  label: const Text('去错题本'),
                 ),
               ],
             ),

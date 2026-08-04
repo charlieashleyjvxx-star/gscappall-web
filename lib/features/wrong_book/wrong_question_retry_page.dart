@@ -76,9 +76,18 @@ class _WrongQuestionRetryPageState
                   ),
                   const SizedBox(height: 16),
                   FilledButton.icon(
-                    onPressed: _isSubmitting ? null : _submitRetry,
-                    icon: const Icon(Icons.fact_check_outlined),
-                    label: Text(_completed ? '再次校验' : '开始校验'),
+                    onPressed:
+                        _isSubmitting
+                            ? null
+                            : _completed
+                            ? () => Navigator.of(context).pop(true)
+                            : _submitRetry,
+                    icon: Icon(
+                      _completed
+                          ? Icons.arrow_back_rounded
+                          : Icons.fact_check_outlined,
+                    ),
+                    label: Text(_completed ? '完成并返回错题本' : '检查这一题'),
                   ),
                 ],
               ),

@@ -233,7 +233,7 @@ void main() {
       gradeLabel: '一年级',
       category: '咏物言志',
       content: '鹅，鹅，鹅，\n曲项向天歌。',
-      pinyin: 'e e e\nqu xiang xiang tian ge',
+      pinyin: 'é é é\nqū xiàng xiàng tiān gē',
       annotation: '',
       translation: '',
       appreciation: '',
@@ -254,6 +254,7 @@ void main() {
 
     final gooseCharacters = tester.widgetList<Text>(find.text('鹅')).toList();
     expect(gooseCharacters, hasLength(3));
+    expect(find.text('é'), findsNWidgets(3));
     final firstTop = tester.getTopLeft(find.text('鹅').first).dy;
     for (final finder in [find.text('鹅').at(1), find.text('鹅').at(2)]) {
       expect(tester.getTopLeft(finder).dy, firstTop);
@@ -362,7 +363,7 @@ void main() {
         category: '咏物',
         content: '鹅，鹅，鹅，\n曲项向天歌。\n白毛浮绿水，\n红掌拨清波。',
         pinyin:
-            'e e e\nqu xiang xiang tian ge\nbai mao fu lv shui\nhong zhang bo qing bo',
+            'é é é\nqū xiàng xiàng tiān gē\nbái máo fú lǜ shuǐ\nhóng zhǎng bō qīng bō',
         annotation: '',
         translation: '',
         appreciation: '',

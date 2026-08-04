@@ -62,7 +62,7 @@ class LocalPracticeRepository implements PracticeRepository {
             answerMode: answerMode,
           ),
           expectedAnswer: lines[index].trim(),
-          knowledgePoint: '${poem.title} #${index + 1}',
+          knowledgePoint: '${poem.title}第 ${index + 1} 句',
         ),
     ];
 
@@ -96,7 +96,7 @@ class LocalPracticeRepository implements PracticeRepository {
         answer: trimmedAnswer,
         isCorrect: false,
         score: 0,
-        feedback: 'No answer yet. Use the hint, then try this line again.',
+        feedback: '还没有作答。可以先看提示，再试一次。',
         mistakeType: PracticeMistakeType.blankAnswer,
         characterAnalysis: _characterIssues(trimmedAnswer, expected),
       );
@@ -108,7 +108,7 @@ class LocalPracticeRepository implements PracticeRepository {
         answer: trimmedAnswer,
         isCorrect: true,
         score: 100,
-        feedback: 'Correct. Keep going.',
+        feedback: '写对了，继续保持。',
       );
     }
 
@@ -118,8 +118,7 @@ class LocalPracticeRepository implements PracticeRepository {
         answer: trimmedAnswer,
         isCorrect: false,
         score: 85,
-        feedback:
-            'The words are right, but punctuation or spacing needs polish.',
+        feedback: '文字写对了，再检查一下标点或空格。',
         mistakeType: PracticeMistakeType.punctuationError,
         characterAnalysis: _characterIssues(trimmedAnswer, expected),
       );
@@ -132,7 +131,7 @@ class LocalPracticeRepository implements PracticeRepository {
         answer: trimmedAnswer,
         isCorrect: false,
         score: (overlap * 75).round().clamp(15, 74),
-        feedback: 'Some characters are missing. Rebuild the line by rhythm.',
+        feedback: '有些字漏写了，按诗句节奏再想一想。',
         mistakeType: PracticeMistakeType.missingCharacters,
         characterAnalysis: _characterIssues(trimmedAnswer, expected),
       );
@@ -144,7 +143,7 @@ class LocalPracticeRepository implements PracticeRepository {
         answer: trimmedAnswer,
         isCorrect: false,
         score: (overlap * 70).round().clamp(10, 72),
-        feedback: 'Extra characters or mixed lines were found.',
+        feedback: '有多写的字，或者混入了其他诗句。',
         mistakeType: PracticeMistakeType.extraCharacters,
         characterAnalysis: _characterIssues(trimmedAnswer, expected),
       );
@@ -155,7 +154,7 @@ class LocalPracticeRepository implements PracticeRepository {
       answer: trimmedAnswer,
       isCorrect: false,
       score: (overlap * 65).round().clamp(10, 68),
-      feedback: 'This line does not match the expected answer.',
+      feedback: '这一句和标准答案不一致，再对照检查一下。',
       mistakeType: PracticeMistakeType.lineMismatch,
       characterAnalysis: _characterIssues(trimmedAnswer, expected),
     );

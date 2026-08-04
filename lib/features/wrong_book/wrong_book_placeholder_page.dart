@@ -169,7 +169,7 @@ class _WrongBookPlaceholderPageState
             icon: const Icon(Icons.edit_note_rounded),
             label: const Text('去练听写'),
           ),
-          FilledButton.tonalIcon(
+          TextButton.icon(
             onPressed:
                 () => Navigator.of(context).push(
                   MaterialPageRoute(

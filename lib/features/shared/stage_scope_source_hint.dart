@@ -176,8 +176,8 @@ class StageScopeFloatingBanner extends StatefulWidget {
 }
 
 class _StageScopeFloatingBannerState extends State<StageScopeFloatingBanner> {
-  Timer? _collapseTimer;
-  bool _collapsed = false;
+  Timer? _dismissTimer;
+  bool _dismissed = false;
 
   @override
   void initState() {
@@ -192,27 +192,27 @@ class _StageScopeFloatingBannerState extends State<StageScopeFloatingBanner> {
         oldWidget.source != widget.source ||
         oldWidget.sourceLabel != widget.sourceLabel ||
         oldWidget.message != widget.message) {
-      _collapsed = false;
+      _dismissed = false;
       _scheduleCollapse();
     }
   }
 
   void _scheduleCollapse() {
-    _collapseTimer?.cancel();
+    _dismissTimer?.cancel();
     final delay = widget.autoCollapseAfter;
     if (delay == null) {
       return;
     }
-    _collapseTimer = Timer(delay, () {
+    _dismissTimer = Timer(delay, () {
       if (mounted) {
-        setState(() => _collapsed = true);
+        setState(() => _dismissed = true);
       }
     });
   }
 
   @override
   void dispose() {
-    _collapseTimer?.cancel();
+    _dismissTimer?.cancel();
     super.dispose();
   }
 
@@ -224,8 +224,6 @@ class _StageScopeFloatingBannerState extends State<StageScopeFloatingBanner> {
     final fullMessage =
         widget.message ??
         '${resolvedSource ?? '地图回跳'} · ${stageScopeSourceMessage(stageLabel: widget.stageLabel, source: widget.source)}';
-    final collapsedMessage =
-        '${resolvedSource ?? '已找到'} · ${widget.stageLabel}';
     return AnimatedSize(
       duration: const Duration(milliseconds: 320),
       curve: Curves.easeOutCubic,
@@ -245,50 +243,54 @@ class _StageScopeFloatingBannerState extends State<StageScopeFloatingBanner> {
                 child: child,
               ),
             ),
-        child: Container(
-          key: ValueKey(_collapsed ? 'collapsed' : 'expanded'),
-          padding: EdgeInsets.symmetric(
-            horizontal: _collapsed ? 12 : 14,
-            vertical: _collapsed ? 8 : 12,
-          ),
-          decoration: BoxDecoration(
-            color: _collapsed ? spec.background : spec.expandedBackground,
-            borderRadius: BorderRadius.circular(_collapsed ? 999 : 18),
-            border: Border.all(color: spec.border.withValues(alpha: 0.55)),
-            boxShadow:
-                _collapsed
-                    ? null
-                    : [
+        child:
+            _dismissed
+                ? const SizedBox.shrink(key: ValueKey('dismissed'))
+                : Container(
+                  key: const ValueKey('visible'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: spec.expandedBackground,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: spec.border.withValues(alpha: 0.55),
+                    ),
+                    boxShadow: [
                       BoxShadow(
                         color: spec.border.withValues(alpha: 0.16),
                         blurRadius: 18,
                         offset: const Offset(0, 8),
                       ),
                     ],
-          ),
-          child: Row(
-            mainAxisSize: _collapsed ? MainAxisSize.min : MainAxisSize.max,
-            children: [
-              Icon(
-                _collapsed ? spec.icon : Icons.my_location_rounded,
-                size: _collapsed ? 16 : 22,
-                color: spec.foreground,
-              ),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  _collapsed ? collapsedMessage : fullMessage,
-                  maxLines: _collapsed ? 1 : 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                    color: spec.foreground,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.max,
+                    children: [
+                      Icon(
+                        Icons.my_location_rounded,
+                        size: 22,
+                        color: spec.foreground,
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          fullMessage,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w900,
+                            color: spec.foreground,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

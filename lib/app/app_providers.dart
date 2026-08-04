@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/app_constants.dart';
 import '../core/service_status.dart';
+import '../core/user_facing_error.dart';
 import '../data/local/app_database.dart';
 import '../data/local/local_seed_loader.dart';
 import '../data/remote/cloud_sync_api.dart';
@@ -155,7 +156,7 @@ final speechScoringServiceProvider = Provider<SpeechScoringService>((ref) {
 });
 
 final speechAssessmentProvider = Provider<SpeechAssessmentProvider>((ref) {
-  return MockSpeechAssessmentProvider(
+  return LocalSpeechAssessmentProvider(
     heuristicScoringService: ref.watch(speechScoringServiceProvider),
   );
 });
@@ -471,35 +472,7 @@ class SyncStatusNotifier extends AsyncNotifier<SyncStatusSnapshot> {
 }
 
 String _friendlySyncError(Object error) {
-  final raw = error.toString();
-  if (error is CloudSyncHttpException) {
-    if (error.statusCode == 401) {
-      return '账号登录状态已失效，请重新登录后再备份。';
-    }
-    if (error.statusCode == 403) {
-      return '当前账号没有访问该资料的权限，请检查备份账号或资料授权。';
-    }
-    if (error.retryable) {
-      return '备份服务暂时不可用，请稍后重试。';
-    }
-  }
-  if (raw.contains('SocketException') ||
-      raw.contains('HandshakeException') ||
-      raw.contains('Failed host lookup')) {
-    return '网络不可用，请稍后重试。';
-  }
-  if (raw.contains('Unauthorized') ||
-      raw.contains('401') ||
-      raw.contains('403')) {
-    return '账号登录状态已失效，请重新登录后再备份。';
-  }
-  if (raw.contains('timeout') || raw.contains('TimeoutException')) {
-    return '备份请求超时，请检查网络后重试。';
-  }
-  if (raw.contains('UnsupportedError')) {
-    return '备份服务暂时不可用。';
-  }
-  return '备份失败，请稍后重试。';
+  return UserFacingErrorMapper.message(error, fallbackMessage: '备份失败，请稍后重试。');
 }
 
 final settingsProvider = FutureProvider<AppSettings>((ref) async {

@@ -160,49 +160,23 @@ class _StudyCardsPageState extends ConsumerState<StudyCardsPage> {
                   ),
                 ),
                 SizedBox(height: sectionGap),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed:
-                            currentIndex == 0
-                                ? null
-                                : () {
-                                  setState(() {
-                                    _index = currentIndex - 1;
-                                    _showBack = false;
-                                  });
-                                },
-                        icon: const Icon(Icons.chevron_left_rounded),
-                        label: const Text('上一张'),
-                      ),
+                if (!_showBack)
+                  SizedBox(
+                    height: 56,
+                    child: FilledButton.icon(
+                      onPressed: () => setState(() => _showBack = true),
+                      icon: const Icon(Icons.flip_rounded),
+                      label: const Text('翻开看看'),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed:
-                            currentIndex >= deck.length - 1
-                                ? null
-                                : () {
-                                  setState(() {
-                                    _index = currentIndex + 1;
-                                    _showBack = false;
-                                  });
-                                },
-                        icon: const Icon(Icons.chevron_right_rounded),
-                        label: const Text('下一张'),
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: sectionGap),
-                _StudyCardActions(
-                  entry: currentEntry,
-                  preferredIndex: currentIndex,
-                  onToggleFavorite: _toggleFavorite,
-                  onEditNote: _editNote,
-                  onMarkReview: _markReview,
-                ),
+                  )
+                else
+                  _StudyCardActions(
+                    entry: currentEntry,
+                    preferredIndex: currentIndex,
+                    onToggleFavorite: _toggleFavorite,
+                    onEditNote: _editNote,
+                    onMarkReview: _markReview,
+                  ),
                 if (_showMore) ...[
                   SizedBox(height: sectionGap),
                   _StudyCardMorePanel(
@@ -221,6 +195,20 @@ class _StudyCardsPageState extends ConsumerState<StudyCardsPage> {
                     },
                     onToggleFavorite: _toggleFavorite,
                     onEditNote: _editNote,
+                    onPrevious:
+                        currentIndex == 0
+                            ? null
+                            : () => setState(() {
+                              _index = currentIndex - 1;
+                              _showBack = false;
+                            }),
+                    onNext:
+                        currentIndex >= deck.length - 1
+                            ? null
+                            : () => setState(() {
+                              _index = currentIndex + 1;
+                              _showBack = false;
+                            }),
                   ),
                 ],
               ],
@@ -612,7 +600,7 @@ class _StudyCardActions extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final twoColumns = constraints.maxWidth >= 360;
-        final review = FilledButton.tonalIcon(
+        final review = TextButton.icon(
           onPressed:
               () => onMarkReview(
                 entry: entry,
@@ -622,30 +610,30 @@ class _StudyCardActions extends StatelessWidget {
           icon: const Icon(Icons.replay_rounded),
           label: const Text('再看一遍'),
         );
-        final remembered = FilledButton.icon(
-          onPressed:
-              () => onMarkReview(
-                entry: entry,
-                remembered: true,
-                preferredIndex: preferredIndex,
-              ),
-          icon: const Icon(Icons.done_rounded),
-          label: const Text('我记住了'),
+        final remembered = SizedBox(
+          height: 56,
+          child: FilledButton.icon(
+            onPressed:
+                () => onMarkReview(
+                  entry: entry,
+                  remembered: true,
+                  preferredIndex: preferredIndex,
+                ),
+            icon: const Icon(Icons.done_rounded),
+            label: const Text('我记住了，下一张'),
+          ),
         );
 
         if (!twoColumns) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [remembered, const SizedBox(height: 8), review],
+            children: [remembered, const SizedBox(height: 4), review],
           );
         }
 
-        return Row(
-          children: [
-            Expanded(child: review),
-            const SizedBox(width: 12),
-            Expanded(child: remembered),
-          ],
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [remembered, const SizedBox(height: 4), review],
         );
       },
     );
@@ -664,6 +652,8 @@ class _StudyCardMorePanel extends StatelessWidget {
     required this.onModeChanged,
     required this.onToggleFavorite,
     required this.onEditNote,
+    required this.onPrevious,
+    required this.onNext,
   });
 
   final StudyCardQuery query;
@@ -681,6 +671,8 @@ class _StudyCardMorePanel extends StatelessWidget {
   onToggleFavorite;
   final Future<void> Function(StudyCardDeckEntry entry, int preferredIndex)
   onEditNote;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
 
   @override
   Widget build(BuildContext context) {
@@ -706,6 +698,26 @@ class _StudyCardMorePanel extends StatelessWidget {
       title: const Text('更多设置'),
       subtitle: const Text('换卡片、提示方式和笔记放在这里。'),
       children: [
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: onPrevious,
+                icon: const Icon(Icons.chevron_left_rounded),
+                label: const Text('上一张'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: onNext,
+                icon: const Icon(Icons.chevron_right_rounded),
+                label: const Text('下一张'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
         _StudyCardModeSelector(
           mode: mode,
           globalShowPinyin: globalShowPinyin,

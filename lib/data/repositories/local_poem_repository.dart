@@ -31,7 +31,9 @@ class LocalPoemRepository implements PoemRepository {
     final poems = await _seedLoader.loadPoems();
     await _database.replaceSeed(poems: poems, seedVersion: seedVersion);
 
-    await _remoteApi.uploadPendingChanges();
+    if (_remoteApi.config.enableNetwork) {
+      await _remoteApi.uploadPendingChanges();
+    }
   }
 
   @override

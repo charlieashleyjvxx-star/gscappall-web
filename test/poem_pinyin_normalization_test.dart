@@ -4,7 +4,7 @@ import 'package:gscappall/domain/poem.dart';
 import 'package:gscappall/shared/widgets/poem_pinyin_text.dart';
 
 void main() {
-  testWidgets('normalizes standalone e with tone mark in poem detail pinyin', (
+  testWidgets('preserves standalone e tone mark in poem detail pinyin', (
     tester,
   ) async {
     const poem = Poem(
@@ -31,7 +31,7 @@ void main() {
       const MaterialApp(home: Scaffold(body: PoemPinyinText(poem: poem))),
     );
 
-    expect(find.text('é'), findsNothing);
-    expect(find.text('e'), findsNWidgets(3));
+    expect(find.text('é'), findsNWidgets(3));
+    expect(find.text('e'), findsNothing);
   });
 }

@@ -21,7 +21,7 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final pages = [
-      HomePage(onSelectTab: _selectTab),
+      const HomePage(),
       const PoemLibraryPage(),
       const GamePage(),
       const ProfilePage(),

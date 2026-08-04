@@ -97,12 +97,12 @@ class _DictationPageState extends ConsumerState<DictationPage> {
                     child: ListView(
                       padding: const EdgeInsets.all(AppSpacing.large),
                       children: [
-                        _buildTrainingHome(),
-                        const SizedBox(height: 16),
                         if (_report != null)
                           _buildReportSummary(_report!)
                         else if (_session != null)
                           _buildLinePractice(_session!),
+                        const SizedBox(height: 16),
+                        _buildTrainingHome(),
                       ],
                     ),
                   ),
@@ -122,7 +122,7 @@ class _DictationPageState extends ConsumerState<DictationPage> {
       title: '练习设置',
       subtitle:
           selectedPoem == null
-              ? '选择诗词和练习方式。'
+              ? null
               : '${selectedPoem.title} · ${_difficulty.label} · ${_answerMode.label}',
       padding: const EdgeInsets.all(AppSpacing.large),
       child: ExpansionTile(
@@ -301,13 +301,6 @@ class _DictationPageState extends ConsumerState<DictationPage> {
                   context,
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
               ),
-              const SizedBox(height: 10),
-              Text(
-                question.hint,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
               if (_showAnswerHint) ...[
                 const SizedBox(height: 10),
                 Container(
@@ -326,6 +319,11 @@ class _DictationPageState extends ConsumerState<DictationPage> {
                 label: '输入第 ${_currentIndex + 1} 句答案',
                 child: TextField(
                   controller: _answerController,
+                  onChanged: (_) {
+                    if (result != null) {
+                      setState(() => _results.remove(_currentIndex));
+                    }
+                  },
                   maxLines: 3,
                   minLines: 3,
                   textInputAction: TextInputAction.newline,
@@ -338,35 +336,49 @@ class _DictationPageState extends ConsumerState<DictationPage> {
                 ),
               ),
               const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  OutlinedButton.icon(
+                  FilledButton.icon(
+                    onPressed: _isSubmitting ? null : _checkAndContinue,
+                    icon: Icon(
+                      result == null
+                          ? Icons.fact_check_outlined
+                          : _currentIndex >= session.questions.length - 1
+                          ? Icons.flag_rounded
+                          : Icons.chevron_right_rounded,
+                    ),
+                    label: Text(
+                      result == null
+                          ? '检查这一句'
+                          : _currentIndex >= session.questions.length - 1
+                          ? '完成本次听写'
+                          : '练下一句',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
                     onPressed:
                         () =>
                             setState(() => _showAnswerHint = !_showAnswerHint),
                     icon: const Icon(Icons.lightbulb_outline_rounded),
                     label: Text(_showAnswerHint ? '收起提示' : '显示提示'),
                   ),
-                  OutlinedButton.icon(
-                    onPressed: _currentIndex == 0 ? null : _previousQuestion,
-                    icon: const Icon(Icons.chevron_left_rounded),
-                    label: const Text('上一句'),
-                  ),
-                  FilledButton.icon(
-                    onPressed: _isSubmitting ? null : _checkAndContinue,
-                    icon: Icon(
-                      _currentIndex >= session.questions.length - 1
-                          ? Icons.flag_rounded
-                          : Icons.chevron_right_rounded,
+                  if (_currentIndex > 0)
+                    ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      title: const Text('更多操作'),
+                      children: [
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: _previousQuestion,
+                            icon: const Icon(Icons.chevron_left_rounded),
+                            label: const Text('返回上一句'),
+                          ),
+                        ),
+                      ],
                     ),
-                    label: Text(
-                      _currentIndex >= session.questions.length - 1
-                          ? '提交报告'
-                          : '校验并下一句',
-                    ),
-                  ),
                 ],
               ),
             ],
@@ -515,23 +527,26 @@ class _DictationPageState extends ConsumerState<DictationPage> {
     if (session == null) {
       return;
     }
+    final existingResult = _results[_currentIndex];
+    if (existingResult != null) {
+      if (_currentIndex >= session.questions.length - 1) {
+        await _submitSession();
+        return;
+      }
+      setState(() {
+        _currentIndex += 1;
+        _showAnswerHint = false;
+        _syncAnswerController();
+      });
+      return;
+    }
+
     _saveCurrentAnswer();
     final result = _repository.evaluateAnswer(
       question: session.questions[_currentIndex],
       answer: _answers[_currentIndex] ?? '',
     );
     setState(() => _results[_currentIndex] = result);
-
-    if (_currentIndex >= session.questions.length - 1) {
-      await _submitSession();
-      return;
-    }
-
-    setState(() {
-      _currentIndex += 1;
-      _showAnswerHint = false;
-      _syncAnswerController();
-    });
   }
 
   Future<void> _submitSession() async {

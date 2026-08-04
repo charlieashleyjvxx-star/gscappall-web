@@ -153,9 +153,11 @@ class _CleanWrongQuestionDetailPageState
                     ),
                     const SizedBox(height: 18),
                   ],
-                  Row(
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Expanded(
+                      SizedBox(
+                        height: 56,
                         child: FilledButton.icon(
                           onPressed:
                               _isUpdating
@@ -177,16 +179,14 @@ class _CleanWrongQuestionDetailPageState
                           label: const Text('按原题再练'),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed:
-                              entry.isReviewed || _isUpdating
-                                  ? null
-                                  : _markReviewed,
-                          icon: const Icon(Icons.task_alt_rounded),
-                          label: const Text('标记已复习'),
-                        ),
+                      const SizedBox(height: 4),
+                      TextButton.icon(
+                        onPressed:
+                            entry.isReviewed || _isUpdating
+                                ? null
+                                : _markReviewed,
+                        icon: const Icon(Icons.task_alt_rounded),
+                        label: const Text('标记已复习'),
                       ),
                     ],
                   ),

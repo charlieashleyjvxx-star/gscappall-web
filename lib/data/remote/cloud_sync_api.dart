@@ -77,9 +77,13 @@ class CloudSyncApi {
   final Future<String?> Function()? accountIdResolver;
   final Future<List<int>> Function()? profileIdsResolver;
 
-  Future<void> uploadPendingChanges() async {}
+  Future<void> uploadPendingChanges() async {
+    _ensureNetworkEnabled();
+  }
 
-  Future<void> pullLatestSnapshot() async {}
+  Future<void> pullLatestSnapshot() async {
+    _ensureNetworkEnabled();
+  }
 
   Future<SyncDeviceInfo> resolveDeviceInfo() async {
     final resolvedDeviceId = await deviceIdResolver?.call();
@@ -140,82 +144,59 @@ class CloudSyncApi {
   }
 
   Future<SyncServerCapabilitiesDto> fetchCapabilities() async {
-    if (config.enableNetwork) {
-      final json = await _transport.getJson(
-        config.endpoint(config.capabilitiesPath),
-        headers: await _requestHeaders(),
-      );
-      return SyncServerCapabilitiesDto.fromJson(json);
-    }
-    return SyncServerCapabilitiesDto.placeholder();
+    _ensureNetworkEnabled();
+    final json = await _transport.getJson(
+      config.endpoint(config.capabilitiesPath),
+      headers: await _requestHeaders(),
+    );
+    return SyncServerCapabilitiesDto.fromJson(json);
   }
 
   Future<SyncPushResponseDto> pushChanges(
     SyncUpstreamPayloadDto payload,
   ) async {
-    if (config.enableNetwork) {
-      final json = await _transport.postJson(
-        config.endpoint(config.pushPath),
-        payload.toJson(),
-        headers: {
-          ...await _requestHeaders(),
-          'X-GSC-Request-Id': payload.requestId,
-        },
-      );
-      return SyncPushResponseDto.fromJson(json);
-    }
-    return SyncPushResponseDto.placeholder(
-      requestId: payload.requestId,
-      checkpoint: payload.checkpoint,
-      acceptedCounts: {
-        for (final entry in payload.batch.counts.entries)
-          syncResourceTypeToWireName(entry.key): entry.value,
+    _ensureNetworkEnabled();
+    final json = await _transport.postJson(
+      config.endpoint(config.pushPath),
+      payload.toJson(),
+      headers: {
+        ...await _requestHeaders(),
+        'X-GSC-Request-Id': payload.requestId,
       },
-      notes: const [
-        'CloudSyncApi is a placeholder transport; it returns structured ack without network.',
-      ],
     );
+    return SyncPushResponseDto.fromJson(json);
   }
 
   Future<SyncPullResponseDto> pullChanges(SyncPullRequestDto request) async {
-    if (config.enableNetwork) {
-      final json = await _transport.postJson(
-        config.endpoint(config.pullPath),
-        request.toJson(),
-        headers: {
-          ...await _requestHeaders(),
-          'X-GSC-Request-Id': request.requestId,
-        },
-      );
-      return SyncPullResponseDto.fromJson(json);
-    }
-    return SyncPullResponseDto.empty(
-      checkpoint: request.checkpoint,
-      notes: const [
-        'CloudSyncApi is a placeholder transport; pull returns an empty batch.',
-      ],
+    _ensureNetworkEnabled();
+    final json = await _transport.postJson(
+      config.endpoint(config.pullPath),
+      request.toJson(),
+      headers: {
+        ...await _requestHeaders(),
+        'X-GSC-Request-Id': request.requestId,
+      },
     );
+    return SyncPullResponseDto.fromJson(json);
   }
 
   Future<List<SyncConflictSuggestionDto>> previewConflicts(
     SyncUpstreamPayloadDto payload,
   ) async {
-    if (config.enableNetwork) {
-      final json = await _transport.postJson(
-        config.endpoint(config.conflictPreviewPath),
-        payload.toJson(),
-        headers: await _requestHeaders(),
-      );
-      final raw = json['conflicts'] ?? json['items'] ?? const [];
-      return (raw as List? ?? const [])
-          .map(
-            (item) => SyncConflictSuggestionDto.fromJson(
-              Map<String, dynamic>.from(item as Map),
-            ),
-          )
-          .toList(growable: false);
-    }
-    return const [];
+    _ensureNetworkEnabled();
+    final json = await _transport.postJson(
+      config.endpoint(config.conflictPreviewPath),
+      payload.toJson(),
+      headers: await _requestHeaders(),
+    );
+    final raw = json['conflicts'] ?? json['items'] ?? const [];
+    return (raw as List? ?? const [])
+        .map(
+          (item) => SyncConflictSuggestionDto.fromJson(
+            Map<String, dynamic>.from(item as Map),
+          ),
+        )
+        .toList(growable: false);
   }
 
   Future<JsonMap> fetchRequestLogs({
@@ -248,6 +229,12 @@ class CloudSyncApi {
 
   CloudSyncTransport get _transport =>
       transport ?? const HttpCloudSyncTransport();
+
+  void _ensureNetworkEnabled() {
+    if (!config.enableNetwork) {
+      throw UnsupportedError('Cloud sync network transport is disabled.');
+    }
+  }
 
   Future<Map<String, String>> _requestHeaders({
     bool includeAuthorization = true,

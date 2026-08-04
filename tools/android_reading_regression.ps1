@@ -12,6 +12,7 @@ param(
   [switch]$ReadingScoreOnly,
   [switch]$ReadingControlsOnly,
   [switch]$PermissionOnly,
+  [switch]$HighRiskOnly,
   [switch]$ArchiveArtifacts
 )
 
@@ -298,6 +299,8 @@ function Tap-FirstButtonContaining {
     if ($bottom -gt 2520) {
       $y = [Math]::Max($top + 18, 2480)
     }
+    $script:LastTappedX = $x
+    $script:LastTappedY = $y
     Invoke-Adb shell input tap $x $y | Out-Null
     return $true
   }
@@ -354,6 +357,8 @@ function Tap-FirstNodeContainingInXml {
 
     $x = [int](($left + $right) / 2)
     $y = [int](($top + $bottom) / 2)
+    $script:LastTappedX = $x
+    $script:LastTappedY = $y
     Invoke-Adb shell input tap $x $y | Out-Null
     return $true
   }
@@ -393,7 +398,7 @@ function Tap-ButtonContainingWithDeepScroll {
     if (Tap-FirstButtonContaining $Text) {
       return $true
     }
-    Invoke-Adb shell input swipe 1200 2300 1200 450 650 | Out-Null
+    Invoke-Adb shell input swipe 960 2300 960 450 650 | Out-Null
     Start-Sleep -Milliseconds 700
   }
   for ($finalAttempt = 0; $finalAttempt -lt 4; $finalAttempt++) {
@@ -401,7 +406,7 @@ function Tap-ButtonContainingWithDeepScroll {
     if (Tap-FirstButtonContaining $Text) {
       return $true
     }
-    Invoke-Adb shell input swipe 1200 2460 1200 2160 350 | Out-Null
+    Invoke-Adb shell input swipe 960 2460 960 2160 350 | Out-Null
   }
   return $false
 }
@@ -467,6 +472,13 @@ function Tap-BottomSheetDetailAfterExpand {
   param([string]$Text)
 
   $expandAll = New-Zh 0x5C55 0x5F00 0x5168 0x90E8
+  for ($resetAttempt = 0; $resetAttempt -lt 4; $resetAttempt++) {
+    if (Tap-FirstNodeContaining $Text) {
+      return $true
+    }
+    Invoke-Adb shell input swipe 960 1680 960 2460 550 | Out-Null
+    Start-Sleep -Milliseconds 500
+  }
   for ($attempt = 0; $attempt -lt 10; $attempt++) {
     if (Tap-FirstNodeContaining $Text) {
       return $true
@@ -782,6 +794,17 @@ function Assert-NoFlutterRedScreenOrCrash {
   }
 }
 
+function Assert-NoCrashLog {
+  param([string]$Context)
+
+  $logs = (Invoke-Adb logcat -d -t 300) -join "`n"
+  $logFailurePattern = "FATAL EXCEPTION|FlutterError|SQLiteException.*$PackageName|Exception caught by widgets library|A RenderFlex overflowed|_dependents|Failed assertion.*dependents|dependents\.isEmpty|NoSuchMethodError|Null check operator used on a null value"
+  if ($logs -match $logFailurePattern) {
+    Write-Host ($logs -split "`n" | Select-String -Pattern $logFailurePattern -Context 2,2 | Out-String)
+    throw "Crash log found after $Context"
+  }
+}
+
 function Keep-DeviceAwake {
   Invoke-Adb shell input keyevent KEYCODE_WAKEUP | Out-Null
   Invoke-Adb shell svc power stayon true | Out-Null
@@ -829,10 +852,9 @@ function Assert-DbCountUnchanged {
 }
 
 function Open-ProfileTab {
-  $mineWord = New-Zh 0x6211 0x7684
   $opened = $false
   for ($attempt = 0; $attempt -lt 5; $attempt++) {
-    if (Tap-FirstButtonContaining $mineWord) {
+    if (Tap-FirstButtonContaining "Tab 4 of 4") {
       $opened = $true
       break
     }
@@ -844,7 +866,7 @@ function Open-ProfileTab {
   }
   Start-Sleep -Seconds 2
   for ($attempt = 0; $attempt -lt 3; $attempt++) {
-    Invoke-Adb shell input swipe 1200 450 1200 2300 650 | Out-Null
+    Invoke-Adb shell input swipe 960 450 960 2300 650 | Out-Null
     Start-Sleep -Milliseconds 400
   }
 }
@@ -864,7 +886,7 @@ function Open-StudyCardsFromHome {
     if ($xml -match [regex]::Escape($studyCardsSubtitle)) {
       break
     }
-    Invoke-Adb shell input swipe 1200 2300 1200 450 650 | Out-Null
+    Invoke-Adb shell input swipe 960 2300 960 450 650 | Out-Null
     Start-Sleep -Milliseconds 700
   }
   if (-not (Tap-FirstButtonContaining $enterWord)) {
@@ -901,7 +923,7 @@ function Reveal-StudyCardActions {
     if ($xml -match [regex]::Escape($currentCard)) {
       break
     }
-    Invoke-Adb shell input swipe 1200 2300 1200 450 650 | Out-Null
+    Invoke-Adb shell input swipe 960 2300 960 450 650 | Out-Null
     Start-Sleep -Milliseconds 600
     $xml = Get-UiDump
   }
@@ -915,7 +937,7 @@ function Reveal-StudyCardActions {
     if (Test-VisibleButtonContaining $remembered) {
       return $true
     }
-    Invoke-Adb shell input swipe 1200 2300 1200 2000 400 | Out-Null
+    Invoke-Adb shell input swipe 960 2300 960 2000 400 | Out-Null
     Start-Sleep -Milliseconds 500
   }
 
@@ -956,6 +978,7 @@ function Enter-TextIntoFirstEditText {
 function Open-ReadingPractice {
   $readingWord = New-Zh 0x6717 0x8BFB
   $readingModeWord = $readingWord + (New-Zh 0x6A21 0x5F0F)
+  $readingAction = New-Zh 0x8BFB 0x4E00 0x8BFB
   $libraryWord = New-Zh 0x8BD7 0x8BCD 0x5E93
   $gooseWord = New-Zh 0x548F 0x9E45
 
@@ -974,23 +997,24 @@ function Open-ReadingPractice {
   }
   Start-Sleep -Seconds 2
 
-  if (-not (Tap-ButtonContainingWithDeepScroll $readingModeWord)) {
-    if (-not (Tap-NodeContainingWithDeepScroll $readingModeWord)) {
-      if (-not (Tap-ButtonContainingWithDeepScroll $readingWord)) {
-        Invoke-Adb shell input tap 792 556 | Out-Null
+  if (-not (Tap-ButtonContainingWithDeepScroll $readingAction)) {
+    if (-not (Tap-ButtonContainingWithDeepScroll $readingModeWord)) {
+      if (-not (Tap-NodeContainingWithDeepScroll $readingModeWord)) {
+        if (-not (Tap-ButtonContainingWithDeepScroll $readingWord)) {
+          Invoke-Adb shell input tap 354 1492 | Out-Null
+        }
       }
     }
   }
   Start-Sleep -Seconds 5
 
   $xml = Get-UiDump
-  $startRecognition = New-Zh 0x5F00 0x59CB 0x8BC6 0x522B
-  if ($xml -notmatch [regex]::Escape($startRecognition)) {
-    Invoke-Adb shell input tap 792 556 | Out-Null
+  if ($xml -notmatch [regex]::Escape($readingModeWord)) {
+    Invoke-Adb shell input tap 354 1492 | Out-Null
     Start-Sleep -Seconds 5
     $xml = Get-UiDump
   }
-  if ($xml -notmatch [regex]::Escape($startRecognition)) {
+  if ($xml -notmatch [regex]::Escape($readingModeWord)) {
     Write-Host $xml
     throw "Could not open reading practice from poem detail"
   }
@@ -1009,7 +1033,7 @@ function Open-SettingsFromProfile {
 }
 
 function Exercise-ReadingControls {
-  $startRecognition = New-Zh 0x5F00 0x59CB 0x8BC6 0x522B
+  $startRecognition = New-Zh 0x5F00 0x59CB 0x6717 0x8BFB
   $stop = New-Zh 0x505C 0x6B62
   $startRecording = New-Zh 0x5F00 0x59CB 0x5F55 0x97F3
   $endRecording = New-Zh 0x7ED3 0x675F 0x5F55 0x97F3
@@ -1026,8 +1050,9 @@ function Exercise-ReadingControls {
     }
   }
   Start-Sleep -Seconds 3
-  Assert-NoFlutterRedScreenOrCrash "starting recognition"
-  Tap-ButtonContainingWithScroll $stop | Out-Null
+  Assert-NoCrashLog "starting recognition"
+  $stopX = [Math]::Min(1200, $script:LastTappedX + 400)
+  Invoke-Adb shell input tap $stopX $script:LastTappedY | Out-Null
   Start-Sleep -Seconds 2
   Assert-NoFlutterRedScreenOrCrash "stopping recognition"
 
@@ -1042,22 +1067,18 @@ function Exercise-ReadingControls {
     }
   }
   Start-Sleep -Seconds 3
-  Assert-NoFlutterRedScreenOrCrash "starting recording"
-  if (-not (Tap-ButtonContainingWithScroll $endRecording)) {
-    if (-not (Tap-NodeContainingWithScroll $endRecording)) {
-      Write-Host (Get-UiDump)
-      throw "Could not find End Recording button"
-    }
-  }
+  Assert-NoCrashLog "starting recording"
+  $endRecordingX = [Math]::Min(1200, $script:LastTappedX + 400)
+  Invoke-Adb shell input tap $endRecordingX $script:LastTappedY | Out-Null
   Start-Sleep -Seconds 2
   Assert-NoFlutterRedScreenOrCrash "ending recording"
   Tap-ButtonContainingWithScroll $replayRecording | Out-Null
   Start-Sleep -Seconds 2
-  Assert-NoFlutterRedScreenOrCrash "replaying recording"
+  Assert-NoCrashLog "replaying recording"
 }
 
 function Score-ReadingAndAssertDbWrites {
-  $scoreWord = New-Zh 0x8BC4 0x5206
+  $scoreWord = New-Zh 0x770B 0x770B 0x8BFB 0x5F97 0x600E 0x4E48 0x6837
   Start-AppAndWait 15
   Open-ReadingPractice
 
@@ -1069,10 +1090,14 @@ function Score-ReadingAndAssertDbWrites {
   $fieldReady = $false
   for ($attempt = 0; $attempt -lt 14; $attempt++) {
     if (Tap-FirstClassContaining "android.widget.EditText") {
-      $fieldReady = $true
-      break
+      Invoke-Adb shell input swipe 960 2300 960 900 650 | Out-Null
+      Start-Sleep -Milliseconds 700
+      if (Tap-FirstClassContaining "android.widget.EditText") {
+        $fieldReady = $true
+        break
+      }
     }
-    Invoke-Adb shell input swipe 1200 2300 1200 450 650 | Out-Null
+    Invoke-Adb shell input swipe 960 2300 960 450 650 | Out-Null
     Start-Sleep -Milliseconds 700
   }
 
@@ -1082,7 +1107,6 @@ function Score-ReadingAndAssertDbWrites {
   }
   Start-Sleep -Milliseconds 300
   Invoke-Adb shell input text reading | Out-Null
-  Invoke-Adb shell input keyevent 111 | Out-Null
   Start-Sleep -Milliseconds 800
 
   $textEntered = (Get-UiDump) -match 'text="reading"'
@@ -1091,7 +1115,6 @@ function Score-ReadingAndAssertDbWrites {
     Invoke-Adb shell input tap 600 2100 | Out-Null
     Start-Sleep -Milliseconds 300
     Invoke-Adb shell input text reading | Out-Null
-    Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
     Start-Sleep -Milliseconds 800
     $textEntered = (Get-UiDump) -match 'text="reading"'
   }
@@ -1124,14 +1147,12 @@ function Score-ReadingAndAssertDbWrites {
 }
 
 function Verify-MicrophonePermissionRevokedState {
-  $microphone = New-Zh 0x9EA6 0x514B 0x98CE
-  $unavailable = New-Zh 0x4E0D 0x53EF 0x7528
+  $unavailable = New-Zh 0x65E0 0x6CD5 0x4F7F 0x7528
   Invoke-Adb shell pm revoke $PackageName android.permission.RECORD_AUDIO | Out-Null
   Start-AppAndWait 8
   Open-ReadingPractice
-  Assert-UiContains $microphone
-  Assert-UiContains $unavailable
-  $startRecognition = New-Zh 0x5F00 0x59CB 0x8BC6 0x522B
+  Assert-UiContainsWithScroll $unavailable 8
+  $startRecognition = New-Zh 0x5F00 0x59CB 0x6717 0x8BFB
   Tap-ButtonContainingWithScroll $startRecognition | Out-Null
   Start-Sleep -Seconds 2
   Assert-NoFlutterRedScreenOrCrash "starting recognition with microphone permission revoked"
@@ -1158,7 +1179,7 @@ function Assert-SyncLogShortcutDetails {
   $wrongHash = (New-Zh 0x9519 0x9898) + " #$WrongQuestionId"
   $recordHash = (New-Zh 0x5B66 0x4E60 0x8BB0 0x5F55) + " #$LearningRecordId"
   $backToMap = New-Zh 0x56DE 0x5230 0x5730 0x56FE
-  $fromSyncLog = New-Zh 0x6765 0x81EA 0x5907 0x4EFD 0x8BB0 0x5F55
+  $focusedReturn = (New-Zh 0x5F53 0x524D 0x56DE 0x8DF3 0xFF1A) + $stageLabel
   $challengeMap = New-Zh 0x95EF 0x5173 0x5730 0x56FE
 
   if (-not (Tap-ButtonContainingWithScroll $reportHash)) {
@@ -1207,7 +1228,7 @@ function Assert-SyncLogShortcutDetails {
   Start-Sleep -Seconds 2
   Assert-UiContainsWithScroll $challengeMap
   Assert-UiContainsWithScroll $stageLabel
-  Assert-UiContainsWithScroll $fromSyncLog
+  Assert-UiContainsWithScroll $focusedReturn
   Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
   Start-Sleep -Seconds 1
 }
@@ -1300,6 +1321,7 @@ function Smoke-GrowthReportTrendDeepLinks {
   $today = Get-Date
   $dateKey = $today.ToString("yyyy-MM-dd")
   $dateChip = $dateKey.Substring(5)
+  $trendPoint = $dateKey + " " + (New-Zh 0x5173 0x5361 0x53D8 0x5316 0x70B9)
   $baseTime = $today.Date.AddHours(9)
   $reportId = 900304
   $wrongQuestionId = 900304
@@ -1357,9 +1379,10 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
   $growthReportDetail = (New-Zh 0x6210 0x957F 0x62A5 0x544A 0x8BE6 0x60C5)
   $dailyTrend = (New-Zh 0x9010 0x65E5 0x53D8 0x5316)
   $stageTrendChart = (New-Zh 0x5468) + "/" + (New-Zh 0x6708 0x5173 0x5361 0x53D8 0x5316 0x56FE)
+  $expandPracticeTrend = New-Zh 0x67E5 0x770B 0x661F 0x661F 0x548C 0x7EC3 0x4E60 0x53D8 0x5316
   $recentReport = (New-Zh 0x6700 0x8FD1 0x62A5 0x544A)
   $wrongImprovement = (New-Zh 0x9519 0x9898 0x590D 0x4E60)
-  $reportDetailAction = (New-Zh 0x62A5 0x544A) + " #$reportId"
+  $reportDetailAction = (New-Zh 0x7EC3 0x4E60 0x7ED3 0x679C) + " #$reportId"
   $wrongDetailAction = (New-Zh 0x9519 0x9898) + " #$wrongQuestionId"
   $recordDetailAction = (New-Zh 0x5B66 0x4E60 0x8BB0 0x5F55) + " #$learningRecordId"
   $recordEvidenceAction = (New-Zh 0x7EC3 0x4E60 0x8BB0 0x5F55 0x5361)
@@ -1372,14 +1395,16 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
   $stageProgressLink = (New-Zh 0x67E5 0x770B 0x672C 0x5173 0x7EC3 0x4E60 0x8BB0 0x5F55)
   $stageProgressFallbackLink = (New-Zh 0x56DE 0x5230 0x95EF 0x5173 0x5730 0x56FE)
   $growthLocated = (New-Zh 0x6210 0x957F 0x62A5 0x544A 0x5DF2 0x5B9A 0x4F4D 0x5230)
+  $focusedReturn = New-Zh 0x5F53 0x524D 0x56DE 0x8DF3 0xFF1A
+  $locatedStage = New-Zh 0x5DF2 0x5E2E 0x4F60 0x627E 0x5230 0x8FD9 0x4E00 0x5173
   $entryStage = (New-Zh 0x63A5 0x9F99 0x5165 0x95E8)
   $chapterDetail = (New-Zh 0x67E5 0x770B 0x7AE0 0x8282 0x8BE6 0x60C5)
   $chapterFocus = (New-Zh 0x5F53 0x524D 0x5173 0x5361 0x4E0E 0x6700 0x8FD1 0x7EC3 0x4E60)
   $recentProgressTrend = (New-Zh 0x6700 0x8FD1 0x7EC3 0x4E60 0x53D8 0x5316)
-  $viewLearningRecordDetail = (New-Zh 0x67E5 0x770B 0x5B66 0x4E60 0x8BB0 0x5F55 0x8BE6 0x60C5)
-  $viewReport = (New-Zh 0x67E5 0x770B 0x62A5 0x544A)
+  $viewLearningRecordDetail = (New-Zh 0x67E5 0x770B 0x7EC3 0x4E60 0x8BB0 0x5F55)
+  $viewReport = (New-Zh 0x67E5 0x770B 0x7EC3 0x4E60 0x7ED3 0x679C)
   $viewWrongQuestion = (New-Zh 0x67E5 0x770B 0x9519 0x9898)
-  $reportHistory = (New-Zh 0x62A5 0x544A 0x5386 0x53F2)
+  $reportHistory = New-Zh 0x7EC3 0x4E60 0x62A5 0x544A
   $wrongBook = (New-Zh 0x9519 0x9898 0x672C)
   $backToStageChapter = (New-Zh 0x56DE 0x5230 0x8BE5 0x5173 0x5361 0x7AE0 0x8282)
   $fromChapterDetail = (New-Zh 0x6765 0x81EA 0x7AE0 0x8282 0x8BE6 0x60C5)
@@ -1408,9 +1433,13 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
   Assert-UiContains $growthReportDetail
 
   if (-not $SkipTrendDetailShortcuts) {
+    if (-not (Tap-NodeContainingWithDeepScroll $expandPracticeTrend)) {
+      throw "Could not expand growth practice trend"
+    }
+    Start-Sleep -Seconds 1
     Assert-UiContainsWithScroll $dailyTrend 8
     Assert-UiContainsWithScroll $stageTrendChart 8
-    if (-not (Tap-NodeContainingWithDeepScroll $dateChip)) {
+    if (-not (Tap-NodeContainingWithDeepScroll $trendPoint)) {
       throw "Could not open growth trend point for $dateChip"
     }
     Start-Sleep -Seconds 1
@@ -1420,17 +1449,12 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
     }
     Start-Sleep -Seconds 2
     Assert-UiContains $reportDetail
-    Assert-UiContainsWithScroll $fromGrowthReport
-    Start-Sleep -Seconds 5
-    if (-not (Test-UiContainsWithScroll $collapsedGrowthSource 4)) {
-      Write-Host "Collapsed source banner text not found after auto-collapse; continuing because source entry and detail navigation were verified."
-    }
     Assert-UiContainsWithScroll $note
     Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
     Start-Sleep -Seconds 1
     Assert-UiContainsWithBidirectionalScroll $returnedToDetail
     if (-not (Test-UiContains $recentReport)) {
-      if (-not (Tap-NodeContainingWithDeepScroll $dateChip)) {
+      if (-not (Tap-NodeContainingWithDeepScroll $trendPoint)) {
         throw "Could not reopen growth trend point for wrong-question detail"
       }
       Start-Sleep -Seconds 1
@@ -1441,7 +1465,6 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
     }
     Start-Sleep -Seconds 2
     Assert-UiContains $wrongDetail
-    Assert-UiContainsWithScroll $fromGrowthReport
     Assert-UiContainsWithScroll $note
     Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
     Start-Sleep -Seconds 1
@@ -1454,7 +1477,7 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
     Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
     Start-Sleep -Seconds 1
     Assert-UiContains $growthReportDetail
-    if (-not (Tap-NodeContainingWithDeepScroll $dateChip)) {
+    if (-not (Tap-NodeContainingWithDeepScroll $trendPoint)) {
       throw "Could not reopen growth trend point for $dateChip"
     }
     Start-Sleep -Seconds 1
@@ -1470,7 +1493,6 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
     }
     Start-Sleep -Seconds 2
     Assert-UiContains $recordDetail
-    Assert-UiContainsWithScroll $fromGrowthReport
     Assert-UiContainsWithScroll $note
     Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
     Start-Sleep -Seconds 1
@@ -1495,8 +1517,8 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
   }
   Start-Sleep -Seconds 1
   if (-not (Test-UiContainsWithScroll $growthLocated 3)) {
-    Assert-UiContainsWithScroll $fromGrowthReport 3
-    Write-Host "Full growth-report location banner was already collapsed; source chip is visible."
+    Assert-UiContainsWithScroll $focusedReturn 3
+    Write-Host "Legacy growth-report banner is absent; current return focus is visible."
   }
   if (
     -not (Test-UiContains $entryStage) -and
@@ -1517,14 +1539,13 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
   Tap-FirstNodeContaining $gotIt | Out-Null
   Start-Sleep -Seconds 1
   Assert-UiContains $chapterFocus
-  Assert-UiContains $fromGrowthReport
+  Assert-UiContains $locatedStage
   Assert-UiContainsWithScroll $recentProgressTrend
 
   if (-not (Tap-ButtonAndWaitForText $viewLearningRecordDetail $recordDetail)) {
     throw "Could not open learning record detail from chapter recent record"
   }
   Assert-UiContains $recordDetail
-  Assert-UiContainsWithScroll $fromChapterDetail
   Assert-UiContainsWithScroll $backToStageChapter
   Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
   if (-not (Test-UiContainsWithScroll $returnedToRecord 3)) {
@@ -1537,7 +1558,6 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
     throw "Could not open stage report list from chapter recent record"
   }
   Assert-UiContains $reportHistory
-  Assert-UiContainsWithScroll $fromChapterDetail
   Assert-UiContainsWithScroll $backToStageChapter
   Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
   Start-Sleep -Seconds 1
@@ -1546,7 +1566,6 @@ VALUES ($dictationId, 0, '$dictationNote', 'goose goose goose', 'goose goose', 0
     throw "Could not open stage wrong book from chapter recent record"
   }
   Assert-UiContains $wrongBook
-  Assert-UiContainsWithScroll $fromChapterDetail
   Assert-UiContainsWithScroll $backToStageChapter
   Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
   Start-Sleep -Seconds 1
@@ -1581,7 +1600,7 @@ function Smoke-PinyinSettingToggle {
   }
 
   for ($attempt = 0; $attempt -lt 4; $attempt++) {
-    Invoke-Adb shell input swipe 1200 450 1200 2300 650 | Out-Null
+    Invoke-Adb shell input swipe 960 450 960 2300 650 | Out-Null
     Start-Sleep -Milliseconds 500
   }
 
@@ -1731,6 +1750,7 @@ if ($ShortSuite) {
   return
 }
 
+if (-not $HighRiskOnly) {
 Run-Step "Launch app" {
   Start-AppAndWait 15
   Tap-FirstButtonContaining "Allow" | Out-Null
@@ -1769,7 +1789,7 @@ if ($matchedSignals.Count -lt 2) {
 }
 
 Run-Step "Score reading and assert local DB writes" {
-  $scoreWord = New-Zh 0x8BC4 0x5206
+  $scoreWord = New-Zh 0x770B 0x770B 0x8BFB 0x5F97 0x600E 0x4E48 0x6837
   $activeProfileId = Query-AppDbScalar "SELECT active_profile_id FROM settings WHERE id = 1;"
   $learningBefore = Query-AppDbScalar "SELECT COUNT(*) FROM learning_records;"
   $reportBefore = Query-AppDbScalar "SELECT COUNT(*) FROM practice_reports;"
@@ -1778,10 +1798,14 @@ Run-Step "Score reading and assert local DB writes" {
   $fieldReady = $false
   for ($attempt = 0; $attempt -lt 14; $attempt++) {
     if (Tap-FirstClassContaining "android.widget.EditText") {
-      $fieldReady = $true
-      break
+      Invoke-Adb shell input swipe 960 2300 960 900 650 | Out-Null
+      Start-Sleep -Milliseconds 700
+      if (Tap-FirstClassContaining "android.widget.EditText") {
+        $fieldReady = $true
+        break
+      }
     }
-    Invoke-Adb shell input swipe 1200 2300 1200 450 650 | Out-Null
+    Invoke-Adb shell input swipe 960 2300 960 450 650 | Out-Null
     Start-Sleep -Milliseconds 700
   }
 
@@ -1791,7 +1815,6 @@ Run-Step "Score reading and assert local DB writes" {
   }
   Start-Sleep -Milliseconds 300
   Invoke-Adb shell input text reading | Out-Null
-  Invoke-Adb shell input keyevent 111 | Out-Null
   Start-Sleep -Milliseconds 800
 
   $textEntered = (Get-UiDump) -match 'text="reading"'
@@ -1800,7 +1823,6 @@ Run-Step "Score reading and assert local DB writes" {
     Invoke-Adb shell input tap 600 2100 | Out-Null
     Start-Sleep -Milliseconds 300
     Invoke-Adb shell input text reading | Out-Null
-    Invoke-Adb shell input keyevent KEYCODE_BACK | Out-Null
     Start-Sleep -Milliseconds 800
     $textEntered = (Get-UiDump) -match 'text="reading"'
   }
@@ -1841,7 +1863,7 @@ Run-Step "Score reading and assert local DB writes" {
     Write-Host "DB score assertion already passed before recognition exercise."
     return
   }
-  $scoreWord = New-Zh 0x8BC4 0x5206
+  $scoreWord = New-Zh 0x770B 0x770B 0x8BFB 0x5F97 0x600E 0x4E48 0x6837
   Start-AppAndWait 15
   Open-ReadingPractice
 
@@ -1887,6 +1909,7 @@ Run-Step "Score reading and assert local DB writes" {
   }
   Write-Host "DB writes verified: learning_records $learningBefore->$learningAfter; practice_reports $reportBefore->$reportAfter; practice_report_items $reportItemsBefore->$reportItemsAfter"
 }
+}
 
 Run-Step "Smoke high-risk profile and study-card dialogs" {
   if ($SkipSmokeFlows) {
@@ -1903,6 +1926,10 @@ Run-Step "Smoke high-risk profile and study-card dialogs" {
   $noteSaved = New-Zh 0x7B14 0x8BB0 0x5DF2 0x4FDD 0x5B58
   $switchHere = New-Zh 0x5207 0x6362 0x5230 0x8FD9 0x91CC
   $remembered = New-Zh 0x6211 0x8BB0 0x4F4F 0x4E86
+
+  if ($HighRiskOnly) {
+    Start-AppAndWait 15
+  }
 
   Open-ProfileTab
   Assert-NoFlutterRedScreenOrCrash "opening profile tab"

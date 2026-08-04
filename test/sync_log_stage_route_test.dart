@@ -111,7 +111,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('报告 #42'));
+    expect(find.textContaining('#42'), findsNothing);
+    await tester.tap(find.text('打开练习报告'));
     await tester.pumpAndSettle();
 
     expect(pushedSettings.last.name, '/practice-report-detail');
@@ -131,7 +132,8 @@ void main() {
     ).pop();
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('错题 #7'));
+    expect(find.textContaining('#7'), findsNothing);
+    await tester.tap(find.text('打开错题详情'));
     await tester.pumpAndSettle();
 
     expect(pushedSettings.last.name, '/wrong-question-detail');
@@ -180,7 +182,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('学习记录 #5'));
+    expect(find.textContaining('#5'), findsNothing);
+    await tester.tap(find.text('打开学习记录'));
     await tester.pumpAndSettle();
 
     expect(pushedSettings.last.name, '/learning-record-detail');

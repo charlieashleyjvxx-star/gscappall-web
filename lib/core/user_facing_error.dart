@@ -1,10 +1,13 @@
+import 'app_environment.dart';
+
 class UserFacingError {
   const UserFacingError({required this.message, required this.code});
 
   final String message;
   final String code;
 
-  String get parentMessage => '$message（错误编号：$code）';
+  String get parentMessage =>
+      AppEnvironment.diagnosticsEnabled ? '$message（错误编号：$code）' : message;
 }
 
 abstract final class UserFacingErrorMapper {
@@ -25,14 +28,24 @@ abstract final class UserFacingErrorMapper {
     if (raw.contains('timeout') || raw.contains('timed out')) {
       return const UserFacingError(message: '请求时间较长，请稍后重试。', code: 'NET-1002');
     }
-    if (raw.contains('401') ||
-        raw.contains('403') ||
-        raw.contains('unauthorized') ||
-        raw.contains('forbidden')) {
+    if (raw.contains('unsupported operation') &&
+        raw.contains('sync network transport')) {
+      return const UserFacingError(message: '当前版本暂不支持网络备份。', code: 'SYNC-1001');
+    }
+    if (raw.contains('401') || raw.contains('unauthorized')) {
       return const UserFacingError(
         message: '登录状态已失效，请重新登录。',
         code: 'AUTH-1001',
       );
+    }
+    if (raw.contains('403') || raw.contains('forbidden')) {
+      return const UserFacingError(
+        message: '当前账号没有操作权限，请检查账号后重试。',
+        code: 'AUTH-1002',
+      );
+    }
+    if (RegExp(r'\b5\d\d\b').hasMatch(raw)) {
+      return const UserFacingError(message: '服务暂时不可用，请稍后重试。', code: 'NET-1003');
     }
     if (raw.contains('permission') || raw.contains('denied')) {
       return const UserFacingError(

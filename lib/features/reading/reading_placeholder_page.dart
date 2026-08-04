@@ -11,12 +11,17 @@ import '../../core/service_status.dart';
 import '../../core/user_facing_error.dart';
 import '../../domain/poem.dart';
 import '../../domain/practice_models.dart';
+import '../../services/audio/audio_player_service.dart';
+import '../../services/record/recorder_service.dart';
 import '../../services/speech/poem_recognition_post_processor.dart';
 import '../../services/speech/speech_assessment_service.dart';
 import '../../services/speech/speech_recognition_service.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/poem_pinyin_text.dart';
-import '../../shared/widgets/recognition_debug_card.dart';
+
+enum _ReadingChildStep { listen, readTogether, complete, voiceChallenge }
+
+enum _ReadingScope { whole, line }
 
 class ReadingPlaceholderPage extends ConsumerStatefulWidget {
   const ReadingPlaceholderPage({super.key, this.poemId});
@@ -35,6 +40,8 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       const PoemRecognitionPostProcessor();
 
   StreamSubscription<SpeechRecognitionResult>? _recognitionSubscription;
+  late final AudioPlayerService _audioPlayerService;
+  late final RecorderService _recorderService;
   late Future<Poem?> _poemFuture;
   Poem? _activePoem;
   int? _activeLineIndex;
@@ -45,15 +52,19 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
   bool _isStopping = false;
   bool _isSaving = false;
   bool _isPracticeRecording = false;
+  bool _isChildFollowing = false;
   bool _isPreparingDemoAudio = false;
   bool _isDemoPlaybackActive = false;
+  bool _hasPlayedDemoForLine = false;
   DateTime? _sessionStartedAt;
-  SpeechAssessmentResult? _lastScore;
-  String? _sessionMessage;
   String? _lastRawRecognitionText;
   String? _practiceRecordingPath;
   String? _playingSource;
   double _playbackSpeed = 1.0;
+  _ReadingScope _readingScope = _ReadingScope.line;
+  _ReadingChildStep _childStep = _ReadingChildStep.listen;
+  final Set<int> _completedLineIndexes = <int>{};
+  bool _childSessionSaved = false;
 
   bool get _supportsLiveRecognition {
     if (kIsWeb) {
@@ -82,6 +93,8 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
   @override
   void initState() {
     super.initState();
+    _audioPlayerService = ref.read(audioPlayerServiceProvider);
+    _recorderService = ref.read(recorderServiceProvider);
     WidgetsBinding.instance.addObserver(this);
     _poemFuture = _loadPoem();
     unawaited(_refreshRecorderPermission());
@@ -96,9 +109,9 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
     final subscription = _recognitionSubscription;
     _recognitionSubscription = null;
     unawaited(subscription?.cancel() ?? Future<void>.value());
-    unawaited(ref.read(audioPlayerServiceProvider).stop());
+    unawaited(_audioPlayerService.stop());
     if (_isPracticeRecording) {
-      unawaited(ref.read(recorderServiceProvider).stop());
+      unawaited(_recorderService.stop());
     }
     _recognizedController.dispose();
     super.dispose();
@@ -118,19 +131,21 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
         ref.watch(textToSpeechServiceProvider).capability;
     final speechService = ref.watch(speechRecognitionServiceProvider);
     final speechCapability = speechService.capability;
-    final recorderCapability = ref.watch(recorderServiceProvider).capability;
-    final speechDebugSnapshot = speechService.lastDebugSnapshot;
     final showPinyin = ref.watch(pinyinVisibleProvider);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('朗读模式'),
+        title: const Text('跟着读'),
         actions: [
           IconButton(
             onPressed: () {
               setState(() {
                 _selectedLineIndex = 0;
-                _resetPracticeState(message: '已刷新本次朗读练习。');
+                _hasPlayedDemoForLine = false;
+                _childStep = _ReadingChildStep.listen;
+                _completedLineIndexes.clear();
+                _childSessionSaved = false;
+                _resetPracticeState();
                 _poemFuture = _loadPoem();
               });
             },
@@ -149,7 +164,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
           if (poem == null) {
             return const EmptyState(
               title: '暂时没有可练习的诗词',
-              description: '可以先去诗词库选一首，再进入朗读练习。',
               icon: Icons.graphic_eq_rounded,
             );
           }
@@ -158,18 +172,92 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
           if (lines.isEmpty) {
             return const EmptyState(
               title: '这首诗暂时缺少可练习的原文',
-              description: '当前无法生成朗读目标句，请换一首诗继续练习。',
               icon: Icons.short_text_rounded,
             );
           }
 
           final safeLineIndex = _selectedLineIndex.clamp(0, lines.length - 1);
-          final targetLine = lines[safeLineIndex];
+          final isWholePoem = _readingScope == _ReadingScope.whole;
           final demoAudioSource = _resolveDemoAudioSource(poem);
           final canUseGeneratedDemo =
               _supportsNativeTextToSpeech &&
               textToSpeechCapability.state != ServiceState.unavailable;
           final canPlayDemo = demoAudioSource != null || canUseGeneratedDemo;
+          final isLastLine = safeLineIndex >= lines.length - 1;
+          final effectiveChildStep =
+              !canPlayDemo && _childStep == _ReadingChildStep.listen
+                  ? _ReadingChildStep.readTogether
+                  : _childStep;
+          final isListeningStep =
+              effectiveChildStep == _ReadingChildStep.listen;
+
+          late final String primaryLabel;
+          late final IconData primaryIcon;
+          late final VoidCallback? primaryAction;
+          if (_isPreparingDemoAudio) {
+            primaryLabel = '正在准备示范...';
+            primaryIcon = Icons.hourglass_top_rounded;
+            primaryAction = null;
+          } else if (_isDemoPlaybackActive) {
+            primaryLabel = '正在听';
+            primaryIcon = Icons.graphic_eq_rounded;
+            primaryAction = null;
+          } else if (_isChildFollowing) {
+            primaryLabel = '读完啦';
+            primaryIcon = Icons.stop_circle_rounded;
+            primaryAction =
+                () => _finishChildFollowReading(
+                  poem: poem,
+                  lineIndex: safeLineIndex,
+                );
+          } else if (_isStarting) {
+            primaryLabel = '正在准备麦克风...';
+            primaryIcon = Icons.hourglass_top_rounded;
+            primaryAction = null;
+          } else if (_isListening) {
+            primaryLabel = '读完啦';
+            primaryIcon = Icons.stop_circle_rounded;
+            primaryAction = _requestStopRecognition;
+          } else if (_isStopping) {
+            primaryLabel = '正在整理朗读内容...';
+            primaryIcon = Icons.hourglass_top_rounded;
+            primaryAction = null;
+          } else if (_isSaving) {
+            primaryLabel = '正在生成反馈...';
+            primaryIcon = Icons.hourglass_top_rounded;
+            primaryAction = null;
+          } else if (_childSessionSaved) {
+            primaryLabel = '再读一遍';
+            primaryIcon = Icons.replay_rounded;
+            primaryAction =
+                () =>
+                    _restartChildReading(poem: poem, canPlayDemo: canPlayDemo);
+          } else if (effectiveChildStep == _ReadingChildStep.listen) {
+            primaryLabel = '听一听';
+            primaryIcon = Icons.volume_up_rounded;
+            primaryAction = () => _listenForChild(poem);
+          } else if (effectiveChildStep == _ReadingChildStep.readTogether) {
+            primaryLabel = '一起读';
+            primaryIcon = Icons.record_voice_over_rounded;
+            primaryAction = () => _readTogether(poem: poem);
+          } else if (effectiveChildStep == _ReadingChildStep.voiceChallenge) {
+            primaryLabel = '开口读';
+            primaryIcon = Icons.mic_rounded;
+            primaryAction =
+                !_supportsLiveRecognition || !speechCapability.isAvailable
+                    ? null
+                    : () => _startRecognition(poem);
+          } else {
+            primaryLabel = isWholePoem || isLastLine ? '完成这首诗' : '读下一句';
+            primaryIcon =
+                isWholePoem || isLastLine
+                    ? Icons.check_circle_rounded
+                    : Icons.arrow_forward_rounded;
+            primaryAction =
+                isWholePoem || isLastLine
+                    ? () => _finishChildReading(poem)
+                    : () => _handleLineSelected(safeLineIndex + 1);
+          }
 
           return ListView(
             padding: const EdgeInsets.all(20),
@@ -178,93 +266,99 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
                 poem: poem,
                 lineIndex: safeLineIndex,
                 totalLines: lines.length,
+                completedLineIndexes: _completedLineIndexes,
+                showLineProgress: !isWholePoem,
               ),
               const SizedBox(height: 16),
-              _CapabilityBanner(
-                isListening: _isListening,
-                message:
-                    _sessionMessage ??
-                    _defaultPracticeMessage(speechCapability),
+              SegmentedButton<_ReadingScope>(
+                segments: const [
+                  ButtonSegment(
+                    value: _ReadingScope.whole,
+                    icon: Icon(Icons.subject_rounded),
+                    label: Text('整首朗读'),
+                  ),
+                  ButtonSegment(
+                    value: _ReadingScope.line,
+                    icon: Icon(Icons.format_list_numbered_rounded),
+                    label: Text('逐句朗读'),
+                  ),
+                ],
+                selected: {_readingScope},
+                showSelectedIcon: false,
+                onSelectionChanged:
+                    (selection) => _handleScopeChanged(selection.first),
               ),
-              if (kDebugMode && speechDebugSnapshot != null) ...[
-                const SizedBox(height: 16),
-                RecognitionDebugCard(
-                  snapshot: speechDebugSnapshot,
-                  nativeState: speechService.lastNativeState,
-                ),
-              ],
               const SizedBox(height: 16),
               Card(
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 28,
+                  ),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '目标诗句',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                      const SizedBox(height: 12),
-                      _LineSelector(
-                        lines: lines,
-                        selectedIndex: safeLineIndex,
-                        onSelected: _handleLineSelected,
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF8EFE0),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: const Color(0xFFE5CFA8)),
-                        ),
-                        child: PoemPinyinText(
-                          poem: poem,
-                          lineIndices: [safeLineIndex],
-                          showPinyin: showPinyin,
-                          variant: PoemPinyinTextVariant.study,
-                        ),
+                      PoemPinyinText(
+                        poem: poem,
+                        lineIndices: isWholePoem ? null : [safeLineIndex],
+                        showPinyin: showPinyin,
+                        variant: PoemPinyinTextVariant.study,
                       ),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 16),
-              _DemoPlayerCard(
-                hasDemoAudio: canPlayDemo,
-                isGeneratedDemo: demoAudioSource == null,
-                isPlaying: _isDemoPlaybackActive,
-                isPreparing: _isPreparingDemoAudio,
-                playbackSpeed: _playbackSpeed,
-                audioCapability: audioCapability,
-                textToSpeechCapability: textToSpeechCapability,
-                onPlay:
-                    !canPlayDemo ||
-                            _isPreparingDemoAudio ||
-                            _isPracticeRecording ||
-                            _isListening ||
-                            _isStarting ||
-                            _isStopping
-                        ? null
-                        : () => _playDemoAudio(poem: poem, sourceLabel: '示范音频'),
-                onStop: _isDemoPlaybackActive ? _stopPlayback : null,
-                onSpeedSelected:
-                    audioCapability.isAvailable
-                        ? _handlePlaybackSpeedChanged
+              _PrimaryPracticeCard(
+                buttonLabel: primaryLabel,
+                buttonIcon: primaryIcon,
+                onPressed: primaryAction,
+                playbackSpeedControl:
+                    isListeningStep
+                        ? _PlaybackSpeedSelector(
+                          value: _playbackSpeed,
+                          onChanged:
+                              audioCapability.isAvailable
+                                  ? _handlePlaybackSpeedChanged
+                                  : null,
+                        )
+                        : null,
+                recordingLabel:
+                    effectiveChildStep == _ReadingChildStep.complete &&
+                            _practiceRecordingPath != null
+                        ? _playingSource == _practiceRecordingPath
+                            ? '停止回放'
+                            : '听听我的声音'
+                        : null,
+                onRecording:
+                    effectiveChildStep == _ReadingChildStep.complete &&
+                            _practiceRecordingPath != null
+                        ? _playingSource == _practiceRecordingPath
+                            ? _stopPlayback
+                            : () => _playAudioSource(
+                              source: _practiceRecordingPath!,
+                              isDemoPlayback: false,
+                            )
+                        : null,
+                secondaryLabel:
+                    effectiveChildStep == _ReadingChildStep.complete &&
+                            !_childSessionSaved
+                        ? '重新读一遍'
+                        : null,
+                onSecondary:
+                    effectiveChildStep == _ReadingChildStep.complete &&
+                            !_childSessionSaved
+                        ? () => _repeatCurrentReading(
+                          poem: poem,
+                          canPlayDemo: canPlayDemo,
+                        )
                         : null,
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
               _RecordingPlaybackCard(
-                recorderCapability: recorderCapability,
-                audioCapability: audioCapability,
                 isRecording: _isPracticeRecording,
-                hasRecording: _practiceRecordingPath != null,
                 isPlayingRecording:
                     !_isDemoPlaybackActive &&
                     _playingSource == _practiceRecordingPath,
-                recordingHint: _recordingHint,
                 onStartRecord:
                     _isPracticeRecording ||
                             _isListening ||
@@ -282,7 +376,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
                         : () => _playAudioSource(
                           source: _practiceRecordingPath!,
                           isDemoPlayback: false,
-                          sourceLabel: '我的录音',
                         ),
                 onStopPlay:
                     !_isDemoPlaybackActive &&
@@ -290,105 +383,171 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
                         ? _stopPlayback
                         : null,
               ),
-              const SizedBox(height: 16),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '跟读练习',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          FilledButton.icon(
-                            onPressed:
-                                !_supportsLiveRecognition ||
-                                        !speechCapability.isAvailable ||
-                                        _isStarting ||
-                                        _isListening ||
-                                        _isStopping ||
-                                        _isPracticeRecording ||
-                                        _isAudioPlaying
-                                    ? null
-                                    : () => _startRecognition(poem),
-                            icon: Icon(
-                              _isListening
-                                  ? Icons.hearing_rounded
-                                  : Icons.mic_rounded,
-                            ),
-                            label: Text(
-                              _isStarting
-                                  ? '准备中...'
-                                  : (_isListening ? '听你读' : '开始朗读'),
-                            ),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed:
-                                (!_isListening && !_isStarting) || _isStopping
-                                    ? null
-                                    : _requestStopRecognition,
-                            icon: const Icon(Icons.stop_circle_outlined),
-                            label: const Text('停止'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: () {
-                              setState(() {
-                                _resetPracticeState(message: '已清空本次朗读结果。');
-                              });
-                            },
-                            icon: const Icon(Icons.cleaning_services_outlined),
-                            label: const Text('清空结果'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _recognizedController,
-                        maxLines: 4,
-                        decoration: InputDecoration(
-                          labelText: '朗读内容',
-                          hintText:
-                              _supportsLiveRecognition
-                                  ? '读完后会显示在这里，也可以自己改一改'
-                                  : '可以先把自己读的内容写在这里',
-                          border: const OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      FilledButton.icon(
-                        onPressed:
-                            _isSaving
-                                ? null
-                                : () => _scoreAndPersist(poem, targetLine),
-                        icon: const Icon(Icons.fact_check_outlined),
-                        label: Text(_isSaving ? '保存中...' : '看看读得怎么样'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              if (_lastScore != null) ...[
-                const SizedBox(height: 16),
-                _ScorePanel(score: _lastScore!),
-              ],
-              const SizedBox(height: 16),
-              _ReadingTipsCard(
-                supportsLiveRecognition: _supportsLiveRecognition,
-                speechCapability: speechCapability,
-                hasDemoAudio: canPlayDemo,
-              ),
             ],
           );
         },
       ),
     );
+  }
+
+  Future<void> _listenForChild(Poem poem) async {
+    await _playDemoAudio(poem: poem);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _childStep = _ReadingChildStep.readTogether;
+    });
+  }
+
+  Future<void> _handlePlaybackSpeedChanged(double speed) async {
+    if (_playbackSpeed == speed) {
+      return;
+    }
+
+    setState(() {
+      _playbackSpeed = speed;
+    });
+
+    try {
+      await _audioPlayerService.setSpeed(speed);
+    } catch (error) {
+      _showSnackBar('倍速设置失败：${_describeError(error)}');
+    }
+  }
+
+  Future<void> _readTogether({required Poem poem}) async {
+    if (_isAudioPlaying) {
+      await _stopPlayback();
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isChildFollowing = true;
+      _practiceRecordingPath = null;
+    });
+
+    try {
+      final recorder = ref.read(recorderServiceProvider);
+      await recorder.requestPermission();
+      await recorder.start();
+      if (!mounted || !_isChildFollowing) {
+        await recorder.stop();
+        return;
+      }
+      setState(() {
+        _isPracticeRecording = true;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isPracticeRecording = false;
+      });
+    }
+  }
+
+  Future<void> _finishChildFollowReading({
+    required Poem poem,
+    required int lineIndex,
+  }) async {
+    String? recordingPath;
+    if (_isPracticeRecording) {
+      try {
+        recordingPath = await ref.read(recorderServiceProvider).stop();
+      } catch (_) {
+        recordingPath = null;
+      }
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isChildFollowing = false;
+      _isPracticeRecording = false;
+      _practiceRecordingPath = recordingPath;
+      if (_readingScope == _ReadingScope.whole) {
+        _completedLineIndexes.addAll(
+          List<int>.generate(poem.lines.length, (index) => index),
+        );
+      } else {
+        _completedLineIndexes.add(lineIndex);
+      }
+      _childStep = _ReadingChildStep.complete;
+    });
+  }
+
+  Future<void> _finishChildReading(Poem poem) async {
+    setState(() {
+      _childSessionSaved = true;
+    });
+    try {
+      await ref
+          .read(learningRepositoryProvider)
+          .logLearningRecord(
+            poemId: poem.id,
+            mode: PracticeMode.reading.rawValue,
+            durationMinutes: 1,
+            note: '完成跟读练习',
+          );
+      ref.invalidate(learningSummaryProvider);
+      ref.invalidate(recentLearningRecordsProvider);
+      ref.invalidate(learningHistoryProvider);
+    } catch (_) {
+      // Completion remains available even when the local record cannot be saved.
+    }
+  }
+
+  Future<void> _restartChildReading({
+    required Poem poem,
+    required bool canPlayDemo,
+  }) async {
+    if (_isAudioPlaying) {
+      await _stopPlayback();
+    }
+    setState(() {
+      _selectedLineIndex = 0;
+      _childStep =
+          canPlayDemo
+              ? _ReadingChildStep.listen
+              : _ReadingChildStep.readTogether;
+      _completedLineIndexes.clear();
+      _childSessionSaved = false;
+      _hasPlayedDemoForLine = false;
+      _resetPracticeState();
+    });
+    if (canPlayDemo) {
+      await _listenForChild(poem);
+    }
+  }
+
+  Future<void> _repeatCurrentReading({
+    required Poem poem,
+    required bool canPlayDemo,
+  }) async {
+    if (_isAudioPlaying) {
+      await _stopPlayback();
+    }
+    final lineIndex = _selectedLineIndex;
+    setState(() {
+      if (_readingScope == _ReadingScope.whole) {
+        _completedLineIndexes.clear();
+        _selectedLineIndex = 0;
+      } else {
+        _completedLineIndexes.remove(lineIndex);
+      }
+      _childStep =
+          canPlayDemo
+              ? _ReadingChildStep.listen
+              : _ReadingChildStep.readTogether;
+      _hasPlayedDemoForLine = false;
+      _resetPracticeState();
+    });
+    if (canPlayDemo) {
+      await _listenForChild(poem);
+    }
   }
 
   Future<Poem?> _loadPoem() async {
@@ -416,11 +575,34 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
     }
     setState(() {
       _selectedLineIndex = index;
-      _resetPracticeState(message: '已切换目标诗句。');
+      _hasPlayedDemoForLine = false;
+      _childStep = _ReadingChildStep.listen;
+      _resetPracticeState();
+    });
+  }
+
+  void _handleScopeChanged(_ReadingScope scope) {
+    if (scope == _readingScope) {
+      return;
+    }
+    if (_isAudioPlaying) {
+      unawaited(_stopPlayback());
+    }
+    setState(() {
+      _readingScope = scope;
+      _selectedLineIndex = 0;
+      _hasPlayedDemoForLine = false;
+      _childStep = _ReadingChildStep.listen;
+      _completedLineIndexes.clear();
+      _childSessionSaved = false;
+      _resetPracticeState();
     });
   }
 
   String? _resolveDemoAudioSource(Poem poem) {
+    if (_readingScope != _ReadingScope.whole) {
+      return null;
+    }
     final audioUrl = poem.audioUrl?.trim();
     if (audioUrl == null || audioUrl.isEmpty) {
       return null;
@@ -457,25 +639,7 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
     }
   }
 
-  Future<void> _handlePlaybackSpeedChanged(double speed) async {
-    setState(() {
-      _playbackSpeed = speed;
-    });
-
-    try {
-      await ref.read(audioPlayerServiceProvider).setSpeed(speed);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _sessionMessage = '播放语速已调整为 ${speed.toStringAsFixed(1)}x。';
-      });
-    } catch (error) {
-      _showSnackBar('调整播放语速失败：${_describeError(error)}');
-    }
-  }
-
-  Future<void> _playDemoAudio({required Poem poem, String? sourceLabel}) async {
+  Future<void> _playDemoAudio({required Poem poem}) async {
     if (_isPracticeRecording) {
       _showSnackBar('请先结束当前录音，再播放示范朗读。');
       return;
@@ -485,36 +649,35 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       await _stopPlayback();
     }
     if (demoAudioSource != null) {
-      await _playAudioSource(
-        source: demoAudioSource,
-        sourceLabel: sourceLabel ?? '示范音频',
-        isDemoPlayback: true,
-      );
+      await _playAudioSource(source: demoAudioSource, isDemoPlayback: true);
       return;
     }
     setState(() {
       _isPreparingDemoAudio = true;
-      _sessionMessage = '正在准备这一句的示范朗读...';
     });
     try {
       final safeLineIndex = _selectedLineIndex.clamp(0, poem.lines.length - 1);
-      final targetLine = poem.lines[safeLineIndex];
+      final targetText =
+          _readingScope == _ReadingScope.whole
+              ? _poeticNarrationText(poem.lines)
+              : _poeticNarrationText([poem.lines[safeLineIndex]]);
+      final cacheKey =
+          _readingScope == _ReadingScope.whole
+              ? 'poem_${poem.id}_whole_child_v2'
+              : 'poem_${poem.id}_line_${safeLineIndex + 1}_child_v2';
       final synthesized = await ref
           .read(textToSpeechServiceProvider)
           .synthesizeToFile(
-            text: targetLine,
-            cacheKey: 'poem_${poem.id}_line_${safeLineIndex + 1}',
+            text: targetText,
+            cacheKey: cacheKey,
+            speechRate: 0.82,
+            pitch: 1.03,
           );
       if (!mounted) {
         return;
       }
-      setState(() {
-        _sessionMessage =
-            synthesized.wasCached ? '已命中本地示范缓存，正在播放。' : '示范朗读准备好了，正在播放。';
-      });
       await _playAudioSource(
         source: synthesized.filePath,
-        sourceLabel: sourceLabel ?? '示范朗读',
         isDemoPlayback: true,
       );
     } catch (error) {
@@ -523,9 +686,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       }
       final message = _describeError(error);
       _showSnackBar('生成示范朗读失败：$message');
-      setState(() {
-        _sessionMessage = '生成示范朗读失败：$message';
-      });
     } finally {
       if (mounted) {
         setState(() {
@@ -537,7 +697,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
 
   Future<void> _playAudioSource({
     required String source,
-    required String sourceLabel,
     required bool isDemoPlayback,
   }) async {
     if (_isPracticeRecording) {
@@ -546,18 +705,47 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
     }
     try {
       await ref.read(audioPlayerServiceProvider).setSpeed(_playbackSpeed);
-      await ref.read(audioPlayerServiceProvider).play(source);
       if (!mounted) {
         return;
       }
       setState(() {
         _playingSource = source;
         _isDemoPlaybackActive = isDemoPlayback;
-        _sessionMessage = '正在播放$sourceLabel，可随时停止。';
+      });
+      await ref.read(audioPlayerServiceProvider).play(source);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        if (_playingSource == source) {
+          _playingSource = null;
+          _isDemoPlaybackActive = false;
+          _hasPlayedDemoForLine = _hasPlayedDemoForLine || isDemoPlayback;
+        }
       });
     } catch (error) {
+      if (mounted) {
+        setState(() {
+          _playingSource = null;
+          _isDemoPlaybackActive = false;
+        });
+      }
       _showSnackBar('播放失败：${_describeError(error)}');
     }
+  }
+
+  String _poeticNarrationText(Iterable<String> lines) {
+    return lines
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .map(
+          (line) => line
+              .replaceAll('，', '，  ')
+              .replaceAll('。', '。   ')
+              .replaceAll('？', '？   ')
+              .replaceAll('！', '！   '),
+        )
+        .join('   ');
   }
 
   Future<void> _stopPlayback() async {
@@ -572,7 +760,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       setState(() {
         _playingSource = null;
         _isDemoPlaybackActive = false;
-        _sessionMessage = '播放已停止。';
       });
     } catch (error) {
       _showSnackBar('停止播放失败：${_describeError(error)}');
@@ -600,7 +787,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       setState(() {
         _isPracticeRecording = true;
         _practiceRecordingPath = null;
-        _sessionMessage = '正在录音，请读完这一句后点击“结束录音”。';
       });
     } catch (error) {
       _showSnackBar('开始录音失败：${_describeError(error)}');
@@ -616,7 +802,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       setState(() {
         _isPracticeRecording = false;
         _practiceRecordingPath = path;
-        _sessionMessage = path == null ? '没有拿到录音文件，请再试一次。' : '录音已保存，可立即回放。';
       });
     } catch (error) {
       if (!mounted) {
@@ -652,13 +837,10 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       _isStarting = true;
       _isListening = false;
       _isStopping = false;
-      _lastScore = null;
       _lastRawRecognitionText = null;
       _sessionStartedAt = DateTime.now();
       _activePoem = poem;
       _activeLineIndex = _selectedLineIndex;
-      _sessionMessage =
-          _supportsLiveRecognition ? '准备好了，请开始朗读。' : '这台设备暂时不能自动听读，可以先手动填写。';
       _recognizedController.clear();
     });
 
@@ -702,7 +884,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
         _isStarting = false;
         _isListening = true;
         _isStopping = false;
-        _sessionMessage = '开始听你读，请朗读当前诗句。';
       });
     } catch (error) {
       unawaited(_refreshRecorderPermission());
@@ -729,7 +910,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       setState(() {
         _isStarting = false;
         _isListening = true;
-        _sessionMessage = '正在听你读，请继续朗读当前诗句。';
       });
       return;
     }
@@ -745,12 +925,14 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       _isStarting = false;
       _isListening = false;
       _isStopping = false;
-      _sessionMessage =
-          result.hasText ? '已经听完，可以看看读得怎么样。' : '没有听清楚，请再读一遍或自己填一下。';
+      _completedLineIndexes.add(_selectedLineIndex);
+      _childStep = _ReadingChildStep.complete;
     });
 
-    if (!result.hasText) {
-      _showSnackBar('没有听清楚，请再读一遍。');
+    final poem = _activePoem;
+    final lineIndex = _activeLineIndex;
+    if (result.hasText && poem != null && lineIndex != null) {
+      unawaited(_scoreAndPersist(poem, poem.lines[lineIndex], silent: true));
     }
   }
 
@@ -763,7 +945,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       return;
     }
 
-    final message = _describeError(error);
     AppLogger.event(
       'recognition_failed',
       feature: 'reading',
@@ -773,9 +954,9 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       _isStarting = false;
       _isListening = false;
       _isStopping = false;
-      _sessionMessage = message;
+      _completedLineIndexes.add(_selectedLineIndex);
+      _childStep = _ReadingChildStep.complete;
     });
-    _showSnackBar(message);
   }
 
   Future<void> _requestStopRecognition() async {
@@ -786,12 +967,9 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
     AppLogger.event('recognition_stop_requested', feature: 'reading');
 
     final speechService = ref.read(speechRecognitionServiceProvider);
-    final hadText = _recognizedController.text.trim().isNotEmpty;
-
     setState(() {
       _isStarting = false;
       _isStopping = true;
-      _sessionMessage = hadText ? '已停下，正在整理你的朗读...' : '已停下，正在整理结果...';
     });
 
     try {
@@ -813,12 +991,17 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       setState(() {
         _isStopping = false;
         _isListening = false;
-        _sessionMessage = hadText ? '整理好了，可以看看读得怎么样。' : '还没有听清楚，请再试一次或自己填一下。';
+        _completedLineIndexes.add(_selectedLineIndex);
+        _childStep = _ReadingChildStep.complete;
       });
     });
   }
 
-  Future<void> _scoreAndPersist(Poem poem, String targetLine) async {
+  Future<void> _scoreAndPersist(
+    Poem poem,
+    String targetLine, {
+    bool silent = false,
+  }) async {
     final recognizedText = _recognizedController.text.trim();
     final assessmentText =
         _lastRawRecognitionText?.trim().isNotEmpty == true
@@ -829,9 +1012,11 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       return;
     }
 
-    setState(() {
-      _isSaving = true;
-    });
+    if (!silent) {
+      setState(() {
+        _isSaving = true;
+      });
+    }
 
     try {
       final score = await ref
@@ -896,10 +1081,10 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
 
       setState(() {
         _isSaving = false;
-        _lastScore = score;
-        _sessionMessage = '这次朗读已经记下来了，可以继续练下一句。';
       });
-      _showSnackBar('已记录《${poem.title}》的朗读练习。');
+      if (!silent) {
+        _showSnackBar('已记录《${poem.title}》的朗读练习。');
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -908,23 +1093,28 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
       final message = _describeError(error);
       setState(() {
         _isSaving = false;
-        _sessionMessage = '这次没有保存成功：$message';
       });
-      _showSnackBar('操作失败：$message');
+      if (!silent) {
+        _showSnackBar('操作失败：$message');
+      }
     }
   }
 
-  void _resetPracticeState({String? message}) {
+  void _resetPracticeState() {
     unawaited(_cancelRecognitionSession());
+    if (_isPracticeRecording) {
+      unawaited(_recorderService.stop());
+    }
     _recognizedController.clear();
-    _lastScore = null;
     _lastRawRecognitionText = null;
     _sessionStartedAt = null;
-    _sessionMessage = message;
     _isListening = false;
     _isStarting = false;
     _isStopping = false;
     _isSaving = false;
+    _isPracticeRecording = false;
+    _isChildFollowing = false;
+    _practiceRecordingPath = null;
   }
 
   Future<void> _cancelRecognitionSession() async {
@@ -989,27 +1179,6 @@ class _ReadingPlaceholderPageState extends ConsumerState<ReadingPlaceholderPage>
     );
   }
 
-  String _defaultPracticeMessage(ServiceCapability speechCapability) {
-    if (_supportsLiveRecognition) {
-      if (speechCapability.isAvailable) {
-        return '可以先听示范，再录音回放，最后看看读得怎么样。';
-      }
-      return speechCapability.userMessage;
-    }
-
-    return '这台设备暂时不能自动听读，可以先手动填写后查看反馈。';
-  }
-
-  String get _recordingHint {
-    if (_isPracticeRecording) {
-      return '正在录音，请读完这一句后点击“结束录音”。';
-    }
-    if (_practiceRecordingPath != null) {
-      return '上一段录音已保存，可直接回放，也可以重新录一遍覆盖。';
-    }
-    return '先录下自己的朗读，再用回放对照目标诗句做复盘。';
-  }
-
   Duration get _sessionDuration {
     if (_sessionStartedAt == null) {
       return Duration.zero;
@@ -1023,11 +1192,79 @@ class _PoemHeaderCard extends StatelessWidget {
     required this.poem,
     required this.lineIndex,
     required this.totalLines,
+    required this.completedLineIndexes,
+    required this.showLineProgress,
   });
 
   final Poem poem;
   final int lineIndex;
   final int totalLines;
+  final Set<int> completedLineIndexes;
+  final bool showLineProgress;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          poem.title,
+          style: Theme.of(
+            context,
+          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        Text('${poem.dynasty} · ${poem.author}'),
+        if (showLineProgress) ...[
+          const SizedBox(height: 12),
+          Row(
+            children: List.generate(totalLines, (index) {
+              final isCurrent = index == lineIndex;
+              final isCompleted = completedLineIndexes.contains(index);
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  width: isCurrent ? 24 : 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color:
+                        isCurrent || isCompleted
+                            ? colorScheme.primary
+                            : colorScheme.outlineVariant,
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _PrimaryPracticeCard extends StatelessWidget {
+  const _PrimaryPracticeCard({
+    required this.buttonLabel,
+    required this.buttonIcon,
+    required this.onPressed,
+    this.playbackSpeedControl,
+    this.recordingLabel,
+    this.onRecording,
+    this.secondaryLabel,
+    this.onSecondary,
+  });
+
+  final String buttonLabel;
+  final IconData buttonIcon;
+  final VoidCallback? onPressed;
+  final Widget? playbackSpeedControl;
+  final String? recordingLabel;
+  final VoidCallback? onRecording;
+  final String? secondaryLabel;
+  final VoidCallback? onSecondary;
 
   @override
   Widget build(BuildContext context) {
@@ -1037,24 +1274,50 @@ class _PoemHeaderCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              poem.title,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: FilledButton.icon(
+                onPressed: onPressed,
+                icon: Icon(buttonIcon),
+                label: Text(
+                  buttonLabel,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
             ),
-            const SizedBox(height: 8),
-            Text('${poem.dynasty} · ${poem.author}'),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                Chip(label: Text(poem.category)),
-                Chip(label: Text('难度 ${poem.difficulty}')),
-                Chip(label: Text('第 ${lineIndex + 1} / $totalLines 句')),
-              ],
-            ),
+            if (playbackSpeedControl != null) ...[
+              const SizedBox(height: 12),
+              playbackSpeedControl!,
+            ],
+            if (recordingLabel != null) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: FilledButton.tonalIcon(
+                  onPressed: onRecording,
+                  icon: const Icon(Icons.hearing_rounded),
+                  label: Text(
+                    recordingLabel!,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+            if (secondaryLabel != null) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: onSecondary,
+                  child: Text(secondaryLabel!),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1062,216 +1325,42 @@ class _PoemHeaderCard extends StatelessWidget {
   }
 }
 
-class _CapabilityBanner extends StatelessWidget {
-  const _CapabilityBanner({required this.isListening, required this.message});
+class _PlaybackSpeedSelector extends StatelessWidget {
+  const _PlaybackSpeedSelector({required this.value, required this.onChanged});
 
-  final bool isListening;
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF6EA),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE7D3AF)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                isListening
-                    ? Icons.hearing_rounded
-                    : Icons.info_outline_rounded,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  message,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LineSelector extends StatelessWidget {
-  const _LineSelector({
-    required this.lines,
-    required this.selectedIndex,
-    required this.onSelected,
-  });
-
-  final List<String> lines;
-  final int selectedIndex;
-  final ValueChanged<int> onSelected;
+  final double value;
+  final ValueChanged<double>? onChanged;
 
   @override
   Widget build(BuildContext context) {
+    const speeds = <double>[0.8, 1.0, 1.2];
     return Wrap(
       spacing: 8,
       runSpacing: 8,
-      children: List.generate(lines.length, (index) {
-        return ChoiceChip(
-          label: Text('第 ${index + 1} 句'),
-          selected: index == selectedIndex,
-          onSelected: (_) => onSelected(index),
-        );
-      }),
-    );
-  }
-}
-
-class _DemoPlayerCard extends StatelessWidget {
-  const _DemoPlayerCard({
-    required this.hasDemoAudio,
-    required this.isGeneratedDemo,
-    required this.isPlaying,
-    required this.isPreparing,
-    required this.playbackSpeed,
-    required this.audioCapability,
-    required this.textToSpeechCapability,
-    required this.onPlay,
-    required this.onStop,
-    required this.onSpeedSelected,
-  });
-  final bool hasDemoAudio;
-  final bool isGeneratedDemo;
-  final bool isPlaying;
-  final bool isPreparing;
-  final double playbackSpeed;
-  final ServiceCapability audioCapability;
-  final ServiceCapability textToSpeechCapability;
-  final VoidCallback? onPlay;
-  final VoidCallback? onStop;
-  final ValueChanged<double>? onSpeedSelected;
-  @override
-  Widget build(BuildContext context) {
-    final tips = switch ((hasDemoAudio, isGeneratedDemo, isPreparing)) {
-      (_, _, true) => '正在为这一句生成本地示范朗读，请稍等。',
-      (true, false, false) => '这一句已有真实示范音频，可以先听一遍再开始朗读。',
-      (true, true, false) => '这一句会先生成一段本地示范朗读，可以听完再跟读。',
-      (false, _, false) => '这一句暂时没有示范朗读，可以先自己试着读。',
-    };
-    final playLabel = switch ((hasDemoAudio, isGeneratedDemo, isPreparing)) {
-      (_, _, true) => '生成中...',
-      (false, _, false) => '暂不可用',
-      (true, false, false) => '播放示范',
-      (true, true, false) => '生成示范',
-    };
-    final speeds = <double>[0.8, 1.0, 1.2];
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '示范播放',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              tips,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(height: 1.6),
-            ),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: speeds
-                  .map(
-                    (speed) => ChoiceChip(
-                      label: Text('${speed.toStringAsFixed(1)}x'),
-                      selected: playbackSpeed == speed,
-                      onSelected:
-                          onSpeedSelected == null
-                              ? null
-                              : (_) => onSpeedSelected!(speed),
-                    ),
-                  )
-                  .toList(growable: false),
-            ),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                FilledButton.icon(
-                  onPressed: onPlay,
-                  icon: Icon(
-                    isPreparing
-                        ? Icons.hourglass_top_rounded
-                        : isPlaying
-                        ? Icons.volume_up_rounded
-                        : Icons.play_arrow_rounded,
-                  ),
-                  label: Text(playLabel),
-                ),
-                OutlinedButton.icon(
-                  onPressed: onStop,
-                  icon: const Icon(Icons.stop_rounded),
-                  label: const Text('停止'),
-                ),
-              ],
-            ),
-            if (!audioCapability.isAvailable) ...[
-              const SizedBox(height: 12),
-              Text(
-                audioCapability.userMessage,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(height: 1.5),
-              ),
-            ] else if (isGeneratedDemo &&
-                !textToSpeechCapability.isAvailable) ...[
-              const SizedBox(height: 12),
-              Text(
-                textToSpeechCapability.message,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(height: 1.5),
-              ),
-            ],
-          ],
-        ),
-      ),
+      children: [
+        for (final speed in speeds)
+          ChoiceChip(
+            label: Text('${speed.toStringAsFixed(1)}x'),
+            selected: value == speed,
+            onSelected: onChanged == null ? null : (_) => onChanged!(speed),
+          ),
+      ],
     );
   }
 }
 
 class _RecordingPlaybackCard extends StatelessWidget {
   const _RecordingPlaybackCard({
-    required this.recorderCapability,
-    required this.audioCapability,
     required this.isRecording,
-    required this.hasRecording,
     required this.isPlayingRecording,
-    required this.recordingHint,
     required this.onStartRecord,
     required this.onStopRecord,
     required this.onPlay,
     required this.onStopPlay,
   });
 
-  final ServiceCapability recorderCapability;
-  final ServiceCapability audioCapability;
   final bool isRecording;
-  final bool hasRecording;
   final bool isPlayingRecording;
-  final String recordingHint;
   final VoidCallback? onStartRecord;
   final VoidCallback? onStopRecord;
   final VoidCallback? onPlay;
@@ -1290,13 +1379,6 @@ class _RecordingPlaybackCard extends StatelessWidget {
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              recordingHint,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(height: 1.6),
             ),
             const SizedBox(height: 14),
             Wrap(
@@ -1328,272 +1410,6 @@ class _RecordingPlaybackCard extends StatelessWidget {
                   label: const Text('停止回放'),
                 ),
               ],
-            ),
-            if (!recorderCapability.isAvailable) ...[
-              const SizedBox(height: 12),
-              Text(
-                recorderCapability.userMessage,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(height: 1.5),
-              ),
-            ] else if (!audioCapability.isAvailable) ...[
-              const SizedBox(height: 12),
-              Text(
-                audioCapability.userMessage,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(height: 1.5),
-              ),
-            ] else if (!hasRecording) ...[
-              const SizedBox(height: 12),
-              Text(
-                '回放按钮会在生成本地录音后启用。',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ScorePanel extends StatelessWidget {
-  const _ScorePanel({required this.score});
-
-  final SpeechAssessmentResult score;
-
-  @override
-  Widget build(BuildContext context) {
-    final items = [
-      ('总分', '${score.totalScore}'),
-      ('准确度', '${score.accuracy}'),
-      ('流畅度', '${score.fluency}'),
-      ('完整度', '${score.completeness}'),
-    ];
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '朗读反馈',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: items
-                  .map(
-                    (item) => Container(
-                      width: 112,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF5EBDD),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(item.$1),
-                          const SizedBox(height: 4),
-                          Text(
-                            item.$2,
-                            style: Theme.of(context).textTheme.titleLarge
-                                ?.copyWith(fontWeight: FontWeight.w800),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                  .toList(growable: false),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _InfoChip(label: '目标字数', value: '${score.expectedLength}'),
-                _InfoChip(label: '读到的字', value: '${score.recognizedLength}'),
-                _InfoChip(label: '命中字数', value: '${score.matchedCount}'),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              score.feedback,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyLarge?.copyWith(height: 1.7),
-            ),
-            if (score.hasDetailFeedback) ...[
-              const SizedBox(height: 14),
-              if (score.mismatches.isNotEmpty)
-                _DetailSection(
-                  title: '容易混淆',
-                  values:
-                      score.mismatches
-                          .map((item) => item.displayLabel)
-                          .toList(),
-                  tint: const Color(0xFFFFF0E0),
-                ),
-              if (score.missedChars.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                _DetailSection(
-                  title: '容易漏读',
-                  values: score.missedChars,
-                  tint: const Color(0xFFFFF5D9),
-                ),
-              ],
-              if (score.extraChars.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                _DetailSection(
-                  title: '多读出来',
-                  values: score.extraChars,
-                  tint: const Color(0xFFF8E8E6),
-                ),
-              ],
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _InfoChip extends StatelessWidget {
-  const _InfoChip({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Chip(label: Text('$label：$value'));
-  }
-}
-
-class _DetailSection extends StatelessWidget {
-  const _DetailSection({
-    required this.title,
-    required this.values,
-    required this.tint,
-  });
-
-  final String title;
-  final List<String> values;
-  final Color tint;
-
-  @override
-  Widget build(BuildContext context) {
-    final preview = values.take(8).toList(growable: false);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: tint,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: Theme.of(
-              context,
-            ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: preview.map((value) => Chip(label: Text(value))).toList(),
-          ),
-          if (values.length > preview.length) ...[
-            const SizedBox(height: 6),
-            Text(
-              '其余 ${values.length - preview.length} 项已省略，可继续跟读复盘。',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _ReadingTipsCard extends StatelessWidget {
-  const _ReadingTipsCard({
-    required this.supportsLiveRecognition,
-    required this.speechCapability,
-    required this.hasDemoAudio,
-  });
-
-  final bool supportsLiveRecognition;
-  final ServiceCapability speechCapability;
-  final bool hasDemoAudio;
-
-  @override
-  Widget build(BuildContext context) {
-    final tips = <String>[
-      hasDemoAudio
-          ? '先听一遍示范，再录下自己的声音，对照回放会更容易发现停顿和节奏问题。'
-          : '当前还没有示范朗读，可以先录下自己的朗读，再通过回放做复盘。',
-      '朗读内容可以手动修正，修正后再看反馈会更准。',
-      '详细反馈会标出容易混淆、漏读和多读出来的字，适合第二遍有针对性地练。',
-      '练完后会留下进步记录，之后可以继续复习。',
-    ];
-
-    if (!supportsLiveRecognition) {
-      tips.add('这台设备暂时不能自动听读，可以先自己填写朗读内容。');
-    } else if (!speechCapability.isAvailable) {
-      tips.add(speechCapability.userMessage);
-    }
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '练习说明',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            ...tips.map(
-              (tip) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.only(top: 6),
-                      child: Icon(Icons.circle, size: 8),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        tip,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.bodyMedium?.copyWith(height: 1.6),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             ),
           ],
         ),

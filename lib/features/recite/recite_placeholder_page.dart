@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/app_providers.dart';
 import '../../core/app_logger.dart';
-import '../../core/service_status.dart';
 import '../../core/user_facing_error.dart';
 import '../../domain/poem.dart';
 import '../../domain/practice_models.dart';
@@ -16,6 +15,8 @@ import '../../services/speech/speech_recognition_service.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/poem_pinyin_text.dart';
 import '../../shared/widgets/recognition_debug_card.dart';
+
+enum _ReciteRevealLevel { full, fewMissing, halfHidden, fullyHidden }
 
 class RecitePlaceholderPage extends ConsumerStatefulWidget {
   const RecitePlaceholderPage({super.key, this.poemId});
@@ -34,15 +35,15 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
   final Map<int, SpeechAssessmentResult> _lineScores =
       <int, SpeechAssessmentResult>{};
   int _currentLineIndex = 0;
-  int? _latestScoredLineIndex;
-  bool _showHint = true;
+  _ReciteRevealLevel _revealLevel = _ReciteRevealLevel.full;
+  final Set<int> _completedLineIndexes = <int>{};
+  bool _childSessionSaved = false;
   bool _isStarting = false;
   bool _isListening = false;
   bool _isStopping = false;
   bool _isScoring = false;
   bool _isSavingSession = false;
   DateTime? _sessionStartedAt;
-  SpeechAssessmentResult? _latestScore;
   String? _sessionMessage;
 
   bool get _supportsLiveRecognition {
@@ -78,23 +79,21 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
   Widget build(BuildContext context) {
     final speechService = ref.watch(speechRecognitionServiceProvider);
     final speechCapability = speechService.capability;
-    final recorderCapability = ref.watch(recorderServiceProvider).capability;
-    final scoringCapability = ref.watch(speechAssessmentProvider).capability;
     final speechDebugSnapshot = speechService.lastDebugSnapshot;
     final showPinyin = ref.watch(pinyinVisibleProvider);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('背诵模式'),
+        title: const Text('背一背'),
         actions: [
           IconButton(
             onPressed: () {
               setState(() {
                 _currentLineIndex = 0;
-                _latestScoredLineIndex = null;
-                _showHint = true;
+                _revealLevel = _ReciteRevealLevel.full;
+                _completedLineIndexes.clear();
+                _childSessionSaved = false;
                 _lineScores.clear();
-                _latestScore = null;
                 _resetPracticeState(message: '已刷新背诵练习。');
                 _poemFuture = _loadPoem();
               });
@@ -130,15 +129,72 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
 
           final safeLineIndex = _currentLineIndex.clamp(0, lines.length - 1);
           final currentLine = lines[safeLineIndex];
-          final completedCount = _lineScores.length;
+          final completedCount = _completedLineIndexes.length;
+          final currentScore = _lineScores[safeLineIndex];
+          final hasRecognizedText =
+              _recognizedController.text.trim().isNotEmpty;
+          final isLastLine = safeLineIndex >= lines.length - 1;
           final averageScore =
-              completedCount == 0
+              _lineScores.isEmpty
                   ? null
                   : (_lineScores.values
                               .map((score) => score.totalScore)
                               .reduce((value, element) => value + element) /
-                          completedCount)
+                          _lineScores.length)
                       .round();
+          final isLineComplete = _completedLineIndexes.contains(safeLineIndex);
+
+          late final String primaryLabel;
+          late final IconData primaryIcon;
+          late final VoidCallback? primaryAction;
+          if (_isStarting) {
+            primaryLabel = '正在准备麦克风...';
+            primaryIcon = Icons.hourglass_top_rounded;
+            primaryAction = null;
+          } else if (_isListening) {
+            primaryLabel = '背完啦';
+            primaryIcon = Icons.stop_circle_rounded;
+            primaryAction = _requestStopRecognition;
+          } else if (_isStopping) {
+            primaryLabel = '正在整理背诵内容...';
+            primaryIcon = Icons.hourglass_top_rounded;
+            primaryAction = null;
+          } else if (_isScoring) {
+            primaryLabel = '正在生成反馈...';
+            primaryIcon = Icons.hourglass_top_rounded;
+            primaryAction = null;
+          } else if (_isSavingSession) {
+            primaryLabel = '正在保存练习...';
+            primaryIcon = Icons.hourglass_top_rounded;
+            primaryAction = null;
+          } else if (_childSessionSaved) {
+            primaryLabel = '再背一遍';
+            primaryIcon = Icons.replay_rounded;
+            primaryAction = _restartSession;
+          } else if (isLineComplete) {
+            primaryLabel = isLastLine ? '完成这首诗' : '练下一句';
+            primaryIcon =
+                isLastLine ? Icons.check_circle_rounded : Icons.arrow_forward;
+            primaryAction =
+                isLastLine
+                    ? () => _finishChildRecitation(poem)
+                    : () => _jumpToLine(safeLineIndex + 1);
+          } else {
+            primaryLabel = switch (_revealLevel) {
+              _ReciteRevealLevel.full => '少几个字',
+              _ReciteRevealLevel.fewMissing => '再遮一些',
+              _ReciteRevealLevel.halfHidden => '全部遮住',
+              _ReciteRevealLevel.fullyHidden => '我背完啦',
+            };
+            primaryIcon = switch (_revealLevel) {
+              _ReciteRevealLevel.full ||
+              _ReciteRevealLevel.fewMissing => Icons.visibility_outlined,
+              _ReciteRevealLevel.halfHidden => Icons.visibility_off_outlined,
+              _ReciteRevealLevel.fullyHidden =>
+                Icons.check_circle_outline_rounded,
+            };
+            primaryAction = () => _advanceChildRecitation(safeLineIndex);
+          }
 
           return ListView(
             padding: const EdgeInsets.all(20),
@@ -150,249 +206,185 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
                 completedCount: completedCount,
               ),
               const SizedBox(height: 16),
-              _CapabilityBanner(
-                speechCapability: speechCapability,
-                recorderCapability: recorderCapability,
-                scoringCapability: scoringCapability,
-                isListening: _isListening,
-                message:
-                    _sessionMessage ??
-                    _defaultPracticeMessage(speechCapability),
-              ),
-              if (kDebugMode && speechDebugSnapshot != null) ...[
-                const SizedBox(height: 16),
-                RecognitionDebugCard(
-                  snapshot: speechDebugSnapshot,
-                  nativeState: speechService.lastNativeState,
-                ),
-              ],
-              const SizedBox(height: 16),
               Card(
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '逐句练习',
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.w800),
-                            ),
-                          ),
-                          Switch.adaptive(
-                            value: _showHint,
-                            onChanged: (value) {
-                              setState(() {
-                                _showHint = value;
-                              });
-                            },
-                          ),
-                          Text(_showHint ? '提示开' : '提示关'),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      _LineProgressWrap(
-                        lines: lines,
-                        selectedIndex: safeLineIndex,
-                        lineScores: _lineScores,
-                        onSelected: _handleLineSelected,
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF7EEDC),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: const Color(0xFFE4CFA6)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '第 ${safeLineIndex + 1} 句',
-                              style: Theme.of(
-                                context,
-                              ).textTheme.labelLarge?.copyWith(
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            if (_showHint)
-                              PoemPinyinText(
-                                poem: poem,
-                                lineIndices: [safeLineIndex],
-                                showPinyin: showPinyin,
-                                variant: PoemPinyinTextVariant.study,
-                              )
-                            else
-                              Text(
-                                _maskedLine(currentLine),
-                                style: Theme.of(
-                                  context,
-                                ).textTheme.headlineSmall?.copyWith(
-                                  height: 1.6,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            const SizedBox(height: 10),
-                            Text(
-                              _showHint
-                                  ? '先看提示背一遍，再试着自己背。'
-                                  : '提示已关闭，先完整背一遍，再看哪里要复习。',
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 28,
                   ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Text(
-                        '背完看一看',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          FilledButton.icon(
-                            onPressed:
-                                !_supportsLiveRecognition ||
-                                        !speechCapability.isAvailable ||
-                                        _isStarting ||
-                                        _isListening ||
-                                        _isStopping
-                                    ? null
-                                    : () => _startRecognition(poem),
-                            icon: Icon(
-                              _isListening
-                                  ? Icons.hearing_rounded
-                                  : Icons.mic_rounded,
-                            ),
-                            label: Text(
-                              _isStarting
-                                  ? '准备中...'
-                                  : (_isListening ? '正在听' : '开始跟背'),
-                            ),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed:
-                                (!_isListening && !_isStarting) || _isStopping
-                                    ? null
-                                    : _requestStopRecognition,
-                            icon: const Icon(Icons.stop_circle_outlined),
-                            label: const Text('停止'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: () {
-                              setState(() {
-                                _resetPracticeState(message: '已清空当前背诵文本。');
-                              });
-                            },
-                            icon: const Icon(Icons.cleaning_services_outlined),
-                            label: const Text('清空文本'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _recognizedController,
-                        maxLines: 4,
-                        decoration: InputDecoration(
-                          labelText: '背诵结果',
-                          hintText:
-                              _supportsLiveRecognition
-                                  ? '背诵内容会写在这里，也可以自己修改'
-                                  : '把背出来的内容写在这里',
-                          border: const OutlineInputBorder(),
+                        _revealLevelLabel(_revealLevel),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.titleMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          FilledButton.icon(
-                            onPressed:
-                                _isScoring
-                                    ? null
-                                    : () => _scoreCurrentLine(
-                                      poem: poem,
-                                      currentLine: currentLine,
-                                      moveNext: false,
-                                    ),
-                            icon: const Icon(Icons.fact_check_outlined),
-                            label: Text(_isScoring ? '正在看...' : '看看本句'),
+                      const SizedBox(height: 20),
+                      if (_revealLevel == _ReciteRevealLevel.full)
+                        PoemPinyinText(
+                          poem: poem,
+                          lineIndices: [safeLineIndex],
+                          showPinyin: showPinyin,
+                          variant: PoemPinyinTextVariant.study,
+                        )
+                      else
+                        Text(
+                          _maskedLineForLevel(currentLine, _revealLevel),
+                          textAlign: TextAlign.center,
+                          style: Theme.of(
+                            context,
+                          ).textTheme.headlineSmall?.copyWith(
+                            height: 1.8,
+                            fontWeight: FontWeight.w700,
                           ),
-                          FilledButton.tonalIcon(
-                            onPressed:
-                                _isScoring
-                                    ? null
-                                    : () => _scoreCurrentLine(
-                                      poem: poem,
-                                      currentLine: currentLine,
-                                      moveNext: true,
-                                    ),
-                            icon: const Icon(Icons.arrow_forward_rounded),
-                            label: const Text('看完下一句'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed:
-                                safeLineIndex == 0
-                                    ? null
-                                    : () => _jumpToLine(safeLineIndex - 1),
-                            icon: const Icon(Icons.chevron_left_rounded),
-                            label: const Text('上一句'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed:
-                                safeLineIndex >= lines.length - 1
-                                    ? null
-                                    : () => _jumpToLine(safeLineIndex + 1),
-                            icon: const Icon(Icons.chevron_right_rounded),
-                            label: const Text('下一句'),
-                          ),
-                        ],
-                      ),
+                        ),
                     ],
                   ),
                 ),
               ),
-              if (_latestScore != null && _latestScoredLineIndex != null) ...[
-                const SizedBox(height: 16),
-                _LatestFeedbackCard(
-                  lineIndex: _latestScoredLineIndex!,
-                  score: _latestScore!,
-                ),
-              ],
-              if (_lineScores.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                _SessionSummaryCard(
-                  completedCount: completedCount,
-                  totalLines: lines.length,
-                  averageScore: averageScore ?? 0,
-                  weakLineIndexes: _weakLineIndexes(),
-                  onSave:
-                      _isSavingSession
-                          ? null
-                          : () => _persistSession(poem, lines),
-                  isSaving: _isSavingSession,
-                ),
-              ],
+              const SizedBox(height: 16),
+              _PrimaryReciteCard(
+                title: _recitePanelTitle(isLineComplete),
+                message: _sessionMessage ?? _recitePanelMessage(isLineComplete),
+                buttonLabel: primaryLabel,
+                buttonIcon: primaryIcon,
+                onPressed: primaryAction,
+                secondaryLabel:
+                    !isLineComplete &&
+                            _revealLevel == _ReciteRevealLevel.fullyHidden &&
+                            !_isListening &&
+                            _supportsLiveRecognition &&
+                            speechCapability.isAvailable
+                        ? '我想挑战开口背'
+                        : null,
+                onSecondary:
+                    !isLineComplete &&
+                            _revealLevel == _ReciteRevealLevel.fullyHidden &&
+                            !_isListening &&
+                            _supportsLiveRecognition &&
+                            speechCapability.isAvailable
+                        ? () => _startRecognition(poem)
+                        : null,
+              ),
+              const SizedBox(height: 8),
+              ExpansionTile(
+                tilePadding: const EdgeInsets.symmetric(horizontal: 4),
+                childrenPadding: const EdgeInsets.only(bottom: 12),
+                title: const Text('家长辅助'),
+                subtitle: const Text('识别详情、练习反馈和诗句设置'),
+                children: [
+                  if (kDebugMode && speechDebugSnapshot != null) ...[
+                    RecognitionDebugCard(
+                      snapshot: speechDebugSnapshot,
+                      nativeState: speechService.lastNativeState,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (currentScore != null) ...[
+                    _LatestFeedbackCard(
+                      lineIndex: safeLineIndex,
+                      score: currentScore,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (_lineScores.isNotEmpty) ...[
+                    _SessionSummaryCard(
+                      completedCount: _lineScores.length,
+                      totalLines: lines.length,
+                      averageScore: averageScore ?? 0,
+                      weakLineIndexes: _weakLineIndexes(),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed:
+                            _isSavingSession
+                                ? null
+                                : () => _persistSession(poem, lines),
+                        icon: const Icon(Icons.save_outlined),
+                        label: const Text('保存评估记录'),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  TextField(
+                    controller: _recognizedController,
+                    onChanged: (_) => setState(() {}),
+                    maxLines: 3,
+                    decoration: InputDecoration(
+                      labelText: '手动修改背诵内容',
+                      hintText: '自动听背不准确时，可以在这里修改',
+                      border: const OutlineInputBorder(),
+                      suffixIcon: IconButton(
+                        tooltip: '清空背诵内容',
+                        onPressed:
+                            hasRecognizedText
+                                ? () => setState(() {
+                                  _recognizedController.clear();
+                                  _lineScores.remove(safeLineIndex);
+                                })
+                                : null,
+                        icon: const Icon(Icons.clear_rounded),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      onPressed:
+                          hasRecognizedText && !_isScoring
+                              ? () => _scoreCurrentLine(
+                                poem: poem,
+                                currentLine: currentLine,
+                                moveNext: false,
+                              )
+                              : null,
+                      icon: const Icon(Icons.fact_check_outlined),
+                      label: const Text('生成家长反馈'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _LineProgressWrap(
+                    lines: lines,
+                    selectedIndex: safeLineIndex,
+                    lineScores: _lineScores,
+                    onSelected: _handleLineSelected,
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed:
+                              safeLineIndex == 0
+                                  ? null
+                                  : () => _jumpToLine(safeLineIndex - 1),
+                          icon: const Icon(Icons.chevron_left_rounded),
+                          label: const Text('上一句'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed:
+                              isLastLine
+                                  ? null
+                                  : () => _jumpToLine(safeLineIndex + 1),
+                          icon: const Icon(Icons.chevron_right_rounded),
+                          label: const Text('下一句'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ],
           );
         },
@@ -422,6 +414,7 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
   void _handleLineSelected(int index) {
     setState(() {
       _currentLineIndex = index;
+      _revealLevel = _ReciteRevealLevel.full;
       _resetPracticeState(message: '已切换到新的背诵诗句。');
     });
   }
@@ -429,8 +422,91 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
   void _jumpToLine(int index) {
     setState(() {
       _currentLineIndex = index;
+      _revealLevel = _ReciteRevealLevel.full;
       _resetPracticeState(message: '已切换到新的背诵诗句。');
     });
+  }
+
+  void _advanceChildRecitation(int lineIndex) {
+    setState(() {
+      switch (_revealLevel) {
+        case _ReciteRevealLevel.full:
+          _revealLevel = _ReciteRevealLevel.fewMissing;
+          _sessionMessage = '少了几个字，再试着读一遍。';
+          break;
+        case _ReciteRevealLevel.fewMissing:
+          _revealLevel = _ReciteRevealLevel.halfHidden;
+          _sessionMessage = '已经记住不少了，再挑战一次。';
+          break;
+        case _ReciteRevealLevel.halfHidden:
+          _revealLevel = _ReciteRevealLevel.fullyHidden;
+          _sessionMessage = '现在不看文字，试着完整背出来。';
+          break;
+        case _ReciteRevealLevel.fullyHidden:
+          _completedLineIndexes.add(lineIndex);
+          _sessionMessage = '这一句背完啦。';
+          break;
+      }
+    });
+  }
+
+  String _revealLevelLabel(_ReciteRevealLevel level) {
+    return switch (level) {
+      _ReciteRevealLevel.full => '看着读',
+      _ReciteRevealLevel.fewMissing => '少几个字',
+      _ReciteRevealLevel.halfHidden => '再遮一些',
+      _ReciteRevealLevel.fullyHidden => '全部遮住',
+    };
+  }
+
+  String _recitePanelTitle(bool isLineComplete) {
+    if (_childSessionSaved) {
+      return '这首诗背完啦';
+    }
+    if (_isListening) {
+      return '正在听你背';
+    }
+    if (isLineComplete) {
+      return '做得好';
+    }
+    return _revealLevel == _ReciteRevealLevel.fullyHidden ? '轮到你背' : '记住这一句';
+  }
+
+  String _recitePanelMessage(bool isLineComplete) {
+    if (_childSessionSaved) {
+      return '今天的背诵完成了。';
+    }
+    if (isLineComplete) {
+      return '可以继续下一句。';
+    }
+    return switch (_revealLevel) {
+      _ReciteRevealLevel.full => '先看着读一遍，再慢慢遮住文字。',
+      _ReciteRevealLevel.fewMissing => '想一想方框里藏着哪个字。',
+      _ReciteRevealLevel.halfHidden => '不用着急，按自己的节奏说出来。',
+      _ReciteRevealLevel.fullyHidden => '不看文字背一遍，背完点“我背完啦”。',
+    };
+  }
+
+  Future<void> _finishChildRecitation(Poem poem) async {
+    setState(() {
+      _childSessionSaved = true;
+      _sessionMessage = '今天的背诵完成了。';
+    });
+    try {
+      await ref
+          .read(learningRepositoryProvider)
+          .logLearningRecord(
+            poemId: poem.id,
+            mode: PracticeMode.recitation.rawValue,
+            durationMinutes: 1,
+            note: '完成渐进背诵练习',
+          );
+      ref.invalidate(learningSummaryProvider);
+      ref.invalidate(recentLearningRecordsProvider);
+      ref.invalidate(learningHistoryProvider);
+    } catch (_) {
+      // Child completion does not depend on persistence or speech services.
+    }
   }
 
   Future<void> _startRecognition(Poem poem) async {
@@ -447,7 +523,6 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
       _isStarting = true;
       _isListening = false;
       _isStopping = false;
-      _latestScore = null;
       _sessionStartedAt ??= DateTime.now();
       _sessionMessage =
           _supportsLiveRecognition ? '正在准备跟背，请开始背诵。' : '可以先把背出的内容写下来。';
@@ -526,13 +601,9 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
       _isStarting = false;
       _isListening = false;
       _isStopping = false;
-      _sessionMessage =
-          result.hasText ? '已经听完，可以看看这一句。' : '这次没听清，可以再试一次或自己写下来。';
+      _completedLineIndexes.add(_currentLineIndex);
+      _sessionMessage = result.hasText ? '开口背完啦，做得好。' : '这次没有听清，也算完成开口挑战。';
     });
-
-    if (!result.hasText) {
-      _showSnackBar('这次没听清，可以再试一次。');
-    }
   }
 
   void _handleRecognitionError(Object error) {
@@ -544,7 +615,6 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
       return;
     }
 
-    final message = _describeError(error);
     AppLogger.event(
       'recognition_failed',
       feature: 'recite',
@@ -554,9 +624,9 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
       _isStarting = false;
       _isListening = false;
       _isStopping = false;
-      _sessionMessage = message;
+      _completedLineIndexes.add(_currentLineIndex);
+      _sessionMessage = '这次没有听清，也算完成开口挑战。';
     });
-    _showSnackBar(message);
   }
 
   // ignore: unused_element
@@ -610,7 +680,8 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
       setState(() {
         _isStopping = false;
         _isListening = false;
-        _sessionMessage = hadText ? '已经停下，可以看看这一句。' : '这次没有听清，可以再试一次或自己写下来。';
+        _completedLineIndexes.add(_currentLineIndex);
+        _sessionMessage = hadText ? '开口背完啦，做得好。' : '这次没有听清，也算完成开口挑战。';
       });
     });
   }
@@ -654,8 +725,6 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
 
       setState(() {
         _isScoring = false;
-        _latestScore = score;
-        _latestScoredLineIndex = scoredLineIndex;
         _lineScores[scoredLineIndex] = score;
         _sessionMessage = '第 ${scoredLineIndex + 1} 句已经看完，请继续练习。';
 
@@ -780,6 +849,17 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
     _isSavingSession = false;
   }
 
+  void _restartSession() {
+    setState(() {
+      _currentLineIndex = 0;
+      _revealLevel = _ReciteRevealLevel.full;
+      _completedLineIndexes.clear();
+      _childSessionSaved = false;
+      _lineScores.clear();
+      _resetPracticeState(message: '从第一句重新开始。');
+    });
+  }
+
   Future<void> _cancelRecognitionSession() async {
     final subscription = _recognitionSubscription;
     _recognitionSubscription = null;
@@ -810,22 +890,22 @@ class _RecitePlaceholderPageState extends ConsumerState<RecitePlaceholderPage> {
     );
   }
 
-  String _defaultPracticeMessage(ServiceCapability speechCapability) {
-    if (_supportsLiveRecognition) {
-      if (speechCapability.isAvailable) {
-        return '可以先看提示背一遍，熟了以后关掉提示自测。';
+  String _maskedLineForLevel(String line, _ReciteRevealLevel level) {
+    var visibleCharacterIndex = 0;
+    return line.split('').map((character) {
+      final isContent = RegExp(r'[A-Za-z0-9\u4E00-\u9FFF]').hasMatch(character);
+      if (!isContent) {
+        return character;
       }
-      return '暂时不能自动听背诵，也可以先手动写下背诵内容。';
-    }
-
-    return '可以先手动写下背诵内容，再看看这一句背得怎么样。';
-  }
-
-  String _maskedLine(String line) {
-    return line.replaceAllMapped(
-      RegExp(r'[A-Za-z0-9\u4E00-\u9FFF]'),
-      (_) => '□',
-    );
+      final index = visibleCharacterIndex++;
+      final hide = switch (level) {
+        _ReciteRevealLevel.full => false,
+        _ReciteRevealLevel.fewMissing => index % 4 == 1,
+        _ReciteRevealLevel.halfHidden => index.isOdd,
+        _ReciteRevealLevel.fullyHidden => true,
+      };
+      return hide ? '□' : character;
+    }).join();
   }
 
   Duration get _sessionDuration {
@@ -867,17 +947,17 @@ class _ReciteHeaderCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text('${poem.dynasty} · ${poem.author}'),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+            const SizedBox(height: 16),
+            Row(
               children: [
-                Chip(label: Text(poem.category)),
-                Chip(label: Text('第 ${currentLineIndex + 1} / $totalLines 句')),
-                Chip(label: Text('已完成 $completedCount 句')),
+                Expanded(child: Text('第 ${currentLineIndex + 1} 句')),
+                Text(
+                  '$completedCount / $totalLines 已完成',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
               ],
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 8),
             ClipRRect(
               borderRadius: BorderRadius.circular(999),
               child: LinearProgressIndicator(value: progress, minHeight: 10),
@@ -889,81 +969,76 @@ class _ReciteHeaderCard extends StatelessWidget {
   }
 }
 
-class _CapabilityBanner extends StatelessWidget {
-  const _CapabilityBanner({
-    required this.speechCapability,
-    required this.recorderCapability,
-    required this.scoringCapability,
-    required this.isListening,
+class _PrimaryReciteCard extends StatelessWidget {
+  const _PrimaryReciteCard({
+    required this.title,
     required this.message,
+    required this.buttonLabel,
+    required this.buttonIcon,
+    required this.onPressed,
+    this.secondaryLabel,
+    this.onSecondary,
   });
 
-  final ServiceCapability speechCapability;
-  final ServiceCapability recorderCapability;
-  final ServiceCapability scoringCapability;
-  final bool isListening;
+  final String title;
   final String message;
+  final String buttonLabel;
+  final IconData buttonIcon;
+  final VoidCallback? onPressed;
+  final String? secondaryLabel;
+  final VoidCallback? onSecondary;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF7EC),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE6D3AE)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                isListening
-                    ? Icons.hearing_rounded
-                    : Icons.lightbulb_outline_rounded,
-                color: Theme.of(context).colorScheme.primary,
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyLarge?.copyWith(height: 1.5),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: FilledButton.icon(
+                onPressed: onPressed,
+                icon: Icon(buttonIcon),
+                label: Text(
+                  buttonLabel,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  message,
-                  style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            if (secondaryLabel != null) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: onSecondary,
+                  child: Text(secondaryLabel!),
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _CapabilityChip(label: '跟背检查', capability: speechCapability),
-              _CapabilityChip(label: '录音回放', capability: recorderCapability),
-              _CapabilityChip(label: '背诵反馈', capability: scoringCapability),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
-  }
-}
-
-class _CapabilityChip extends StatelessWidget {
-  const _CapabilityChip({required this.label, required this.capability});
-
-  final String label;
-  final ServiceCapability capability;
-
-  @override
-  Widget build(BuildContext context) {
-    final (chipColor, text) = switch (capability.state) {
-      ServiceState.available => (const Color(0xFFDDF3E1), '可以'),
-      ServiceState.placeholder => (const Color(0xFFFFE9C8), '稍后'),
-      ServiceState.unavailable => (const Color(0xFFF6D7D4), '稍后'),
-    };
-
-    return Chip(backgroundColor: chipColor, label: Text('$label：$text'));
   }
 }
 
@@ -1088,16 +1163,12 @@ class _SessionSummaryCard extends StatelessWidget {
     required this.totalLines,
     required this.averageScore,
     required this.weakLineIndexes,
-    required this.onSave,
-    required this.isSaving,
   });
 
   final int completedCount;
   final int totalLines;
   final int averageScore;
   final List<int> weakLineIndexes;
-  final VoidCallback? onSave;
-  final bool isSaving;
 
   @override
   Widget build(BuildContext context) {
@@ -1144,12 +1215,6 @@ class _SessionSummaryCard extends StatelessWidget {
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(height: 1.6),
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: onSave,
-              icon: const Icon(Icons.save_outlined),
-              label: Text(isSaving ? '保存中...' : '保存本次背诵记录'),
             ),
           ],
         ),

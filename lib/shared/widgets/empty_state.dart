@@ -4,13 +4,13 @@ class EmptyState extends StatelessWidget {
   const EmptyState({
     super.key,
     required this.title,
-    required this.description,
+    this.description,
     this.icon = Icons.menu_book_rounded,
     this.action,
   });
 
   final String title;
-  final String description;
+  final String? description;
   final IconData icon;
   final Widget? action;
 
@@ -30,22 +30,20 @@ class EmptyState extends StatelessWidget {
               style: theme.textTheme.titleLarge,
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 8),
-            Text(
-              description,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            if (description?.trim().isNotEmpty == true) ...[
+              const SizedBox(height: 8),
+              Text(
+                description!,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
               ),
-              textAlign: TextAlign.center,
-            ),
-            if (action != null) ...[
-              const SizedBox(height: 16),
-              action!,
             ],
+            if (action != null) ...[const SizedBox(height: 16), action!],
           ],
         ),
       ),
     );
   }
 }
-

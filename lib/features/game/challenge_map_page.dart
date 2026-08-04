@@ -10,6 +10,7 @@ import '../../domain/practice_models.dart';
 import '../../domain/sync/sync_models.dart';
 import '../../services/game/challenge_progress_service.dart';
 import '../../shared/widgets/section_card.dart';
+import 'game_session_widgets.dart';
 import '../profile/profile_support.dart';
 import '../shared/stage_contribution_view.dart';
 import '../shared/stage_scope_detail_panel.dart';
@@ -624,6 +625,12 @@ class _ChallengeStageDetailPageState
                   Chip(label: Text('练习 ${stage.totalSessions} 次')),
                 ],
               ),
+            ),
+            const SizedBox(height: 12),
+            GameRuleCard(
+              goal: stage.rule.title,
+              rule: stage.rule.description,
+              completion: '完成 ${stage.rule.requiredLines} 句后结算本关星级。',
             ),
             const SizedBox(height: 12),
             SectionCard(

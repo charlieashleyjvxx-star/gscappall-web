@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.BinaryMessenger
@@ -161,6 +162,7 @@ internal class NativeTextToSpeechBridge(
             }
 
             localeReady = true
+            selectPreferredVoice(engine, locale)
             engine.setSpeechRate(speechRate)
             engine.setPitch(pitch)
 
@@ -326,16 +328,18 @@ internal class NativeTextToSpeechBridge(
         cacheKey: String?,
     ): File {
         val safeKey = cacheKey?.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        val sourceKey = safeKey ?: buildString {
+        val sourceKey = buildString {
+            append(safeKey ?: text)
+            append('|')
             append(textToSpeech?.defaultEngine ?: "default")
+            append('|')
+            append(textToSpeech?.voice?.name ?: "default_voice")
             append('|')
             append(localeTag)
             append('|')
             append(speechRate)
             append('|')
             append(pitch)
-            append('|')
-            append(text)
         }
         val digest = sha1(sourceKey)
         val directory = File(activity.filesDir, "tts_cache")
@@ -351,6 +355,35 @@ internal class NativeTextToSpeechBridge(
         return status == TextToSpeech.LANG_AVAILABLE ||
             status == TextToSpeech.LANG_COUNTRY_AVAILABLE ||
             status == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE
+    }
+
+    private fun selectPreferredVoice(
+        engine: TextToSpeech,
+        locale: Locale,
+    ) {
+        val preferredVoice = engine.voices
+            ?.asSequence()
+            ?.filter { voice -> voice.locale.language == locale.language }
+            ?.sortedWith(
+                compareByDescending<Voice> { voice ->
+                    voice.locale.toLanguageTag().equals(locale.toLanguageTag(), ignoreCase = true)
+                }
+                    .thenByDescending { voice -> voice.quality }
+                    .thenBy { voice -> voice.latency }
+                    .thenBy { voice -> voice.isNetworkConnectionRequired },
+            )
+            ?.firstOrNull()
+            ?: return
+
+        try {
+            engine.voice = preferredVoice
+            logTts(
+                "preferred voice selected name=${preferredVoice.name} " +
+                    "quality=${preferredVoice.quality} network=${preferredVoice.isNetworkConnectionRequired}",
+            )
+        } catch (error: RuntimeException) {
+            logTts("preferred voice selection failed: ${error.javaClass.simpleName}")
+        }
     }
 
     private fun runOnMain(action: () -> Unit) {

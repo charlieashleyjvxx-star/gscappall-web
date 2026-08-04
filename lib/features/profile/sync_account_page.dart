@@ -283,17 +283,10 @@ class _SyncAccountPageState extends ConsumerState<SyncAccountPage> {
         case 'UNAUTHORIZED':
           return '登录已失效，请重新登录。';
         default:
-          return '账号服务返回错误：${error.code ?? error.statusCode}';
+          return '账号服务暂时不可用，请稍后重试。';
       }
     }
-    final raw = error.toString();
-    if (raw.contains('SocketException') || raw.contains('Failed host lookup')) {
-      return '连接不到备份服务，请确认备份服务已启动，真机网络转发或局域网地址已配置。';
-    }
-    if (raw.contains('UnsupportedError')) {
-      return '当前安装包未开启网络备份，请安装已启用网络备份的调试包。';
-    }
-    return '登录失败，请稍后再试。';
+    return UserFacingErrorMapper.message(error, fallbackMessage: '登录失败，请稍后再试。');
   }
 
   void _showMessage(BuildContext context, String message) {

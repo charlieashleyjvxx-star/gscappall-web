@@ -9,6 +9,7 @@ import '../../domain/poem.dart';
 import '../../services/game/challenge_progress_service.dart';
 import '../../services/game/poetry_jielong_service.dart';
 import '../../shared/widgets/section_card.dart';
+import 'game_session_widgets.dart';
 
 class PoetryJielongPage extends ConsumerStatefulWidget {
   const PoetryJielongPage({super.key});
@@ -89,125 +90,141 @@ class _PoetryJielongPageState extends ConsumerState<PoetryJielongPage> {
                 ),
                 const SizedBox(height: 16),
                 if (_report != null) ...[
-                  _CompletionReportCard(
-                    report: _report!,
-                    pointsAwarded: _pointsAwarded,
+                  GameResultCard(
+                    summary: _report!.summary,
+                    metrics: {
+                      '句数': '${_report!.lineCount}',
+                      '同音提示': '${_report!.sameSoundCount}',
+                      '得分': '${_report!.score}',
+                      '星星': _pointsAwarded ? '已获得' : '今天已记录',
+                    },
+                    primaryLabel: '再来一局',
+                    onPrimary: () => _restart(bank),
+                    secondaryLabel: '返回闯关地图',
+                    onSecondary: () => Navigator.of(context).pop(),
                   ),
-                  const SizedBox(height: 16),
-                ],
-                SectionCard(
-                  title: '当前接龙',
-                  subtitle: '接上一句，继续挑战。',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      TextField(
-                        controller: _controller,
-                        minLines: 1,
-                        maxLines: 2,
-                        decoration: InputDecoration(
-                          labelText: '输入以“$targetChar”开头或同音的诗句',
-                          hintText:
-                              suggestions.isEmpty
-                                  ? '例如输入完整诗句'
-                                  : suggestions.first.text,
-                          border: const OutlineInputBorder(),
-                        ),
-                        onSubmitted: (_) => _submit(bank, service),
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          FilledButton.icon(
-                            onPressed: () => _submit(bank, service),
-                            icon: const Icon(Icons.play_arrow_rounded),
-                            label: const Text('接一句'),
-                          ),
-                          FilledButton.tonalIcon(
-                            onPressed:
+                ] else ...[
+                  SectionCard(
+                    title: '当前接龙',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        TextField(
+                          controller: _controller,
+                          minLines: 1,
+                          maxLines: 2,
+                          decoration: InputDecoration(
+                            labelText: '输入以“$targetChar”开头或同音的诗句',
+                            hintText:
                                 suggestions.isEmpty
-                                    ? null
-                                    : () {
-                                      _controller.text = suggestions.first.text;
-                                      _submit(bank, service);
-                                    },
-                            icon: const Icon(Icons.tips_and_updates_rounded),
-                            label: const Text('用提示'),
+                                    ? '例如输入完整诗句'
+                                    : suggestions.first.text,
+                            border: const OutlineInputBorder(),
                           ),
-                          OutlinedButton.icon(
-                            onPressed: () => _restart(bank),
-                            icon: const Icon(Icons.refresh_rounded),
-                            label: const Text('重开'),
+                          onSubmitted: (_) => _submit(bank, service),
+                        ),
+                        const SizedBox(height: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            FilledButton.icon(
+                              onPressed: () => _submit(bank, service),
+                              icon: const Icon(Icons.play_arrow_rounded),
+                              label: const Text('接一句'),
+                            ),
+                            TextButton.icon(
+                              onPressed:
+                                  suggestions.isEmpty
+                                      ? null
+                                      : () {
+                                        _controller.text =
+                                            suggestions.first.text;
+                                      },
+                              icon: const Icon(Icons.tips_and_updates_rounded),
+                              label: const Text('给我提示'),
+                            ),
+                            ExpansionTile(
+                              tilePadding: EdgeInsets.zero,
+                              title: const Text('更多操作'),
+                              children: [
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    onPressed: () => _restart(bank),
+                                    icon: const Icon(Icons.refresh_rounded),
+                                    label: const Text('重新开始本局'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        if (_message != null) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            _message!,
+                            style: TextStyle(
+                              color:
+                                  _message!.contains('接上')
+                                      ? const Color(0xFF3F7D45)
+                                      : Theme.of(context).colorScheme.error,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ],
-                      ),
-                      if (_message != null) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          _message!,
-                          style: TextStyle(
-                            color:
-                                _message!.contains('接上')
-                                    ? const Color(0xFF3F7D45)
-                                    : Theme.of(context).colorScheme.error,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
                       ],
-                    ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                SectionCard(
-                  title: '提示',
-                  subtitle: suggestions.isEmpty ? '可以重开一局。' : '想不起来时看一眼。',
-                  child:
-                      suggestions.isEmpty
-                          ? const Text('暂无候选。')
-                          : Column(
-                            children: suggestions
-                                .map(
-                                  (line) => ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    title: Text(line.text),
-                                    subtitle: Text(
-                                      '《${line.poem.title}》${line.poem.author}',
+                  const SizedBox(height: 16),
+                  SectionCard(
+                    title: '提示',
+                    child: ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      title: const Text('展开提示'),
+                      children:
+                          suggestions.isEmpty
+                              ? const [Text('暂无候选。')]
+                              : suggestions
+                                  .map(
+                                    (line) => ListTile(
+                                      contentPadding: EdgeInsets.zero,
+                                      title: Text(line.text),
+                                      subtitle: Text(
+                                        '《${line.poem.title}》${line.poem.author}',
+                                      ),
+                                      trailing: const Icon(
+                                        Icons.chevron_right_rounded,
+                                      ),
+                                      onTap: () {
+                                        _controller.text = line.text;
+                                      },
                                     ),
-                                    trailing: const Icon(
-                                      Icons.chevron_right_rounded,
-                                    ),
-                                    onTap: () {
-                                      _controller.text = line.text;
-                                    },
-                                  ),
-                                )
-                                .toList(growable: false),
-                          ),
-                ),
-                const SizedBox(height: 16),
-                SectionCard(
-                  title: '接龙记录',
-                  subtitle: '完成 3 句就能得到星星。',
-                  child: Column(
-                    children: _chain
-                        .asMap()
-                        .entries
-                        .map(
-                          (entry) => ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: CircleAvatar(
-                              backgroundColor: const Color(0xFFFFF2D6),
-                              child: Text('${entry.key + 1}'),
+                                  )
+                                  .toList(growable: false),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SectionCard(
+                    title: '接龙记录',
+                    child: Column(
+                      children: _chain
+                          .asMap()
+                          .entries
+                          .map(
+                            (entry) => ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: CircleAvatar(
+                                backgroundColor: const Color(0xFFFFF2D6),
+                                child: Text('${entry.key + 1}'),
+                              ),
+                              title: Text(entry.value.text),
+                              subtitle: Text('《${entry.value.poem.title}》'),
                             ),
-                            title: Text(entry.value.text),
-                            subtitle: Text('《${entry.value.poem.title}》'),
-                          ),
-                        )
-                        .toList(growable: false),
+                          )
+                          .toList(growable: false),
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           );
@@ -391,59 +408,11 @@ class _JielongHero extends StatelessWidget {
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                const SizedBox(height: 4),
-                const Text('接上一句，完成 3 句就能得到星星。'),
               ],
             ),
           ),
         ],
       ),
-    );
-  }
-}
-
-class _CompletionReportCard extends StatelessWidget {
-  const _CompletionReportCard({
-    required this.report,
-    required this.pointsAwarded,
-  });
-
-  final PoetryJielongReport report;
-  final bool pointsAwarded;
-
-  @override
-  Widget build(BuildContext context) {
-    return SectionCard(
-      title: '本局结果',
-      subtitle: report.summary,
-      child: Wrap(
-        spacing: 10,
-        runSpacing: 10,
-        children: [
-          _ReportChip(label: '句数', value: '${report.lineCount}'),
-          _ReportChip(label: '提示', value: '${report.sameSoundCount}'),
-          _ReportChip(label: '得分', value: '${report.score}'),
-          _ReportChip(
-            label: pointsAwarded ? '星星' : '今天已记',
-            value: pointsAwarded ? '已得' : '已完成',
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ReportChip extends StatelessWidget {
-  const _ReportChip({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Chip(
-      label: Text('$label $value'),
-      backgroundColor: const Color(0xFFFFF2D6),
     );
   }
 }
